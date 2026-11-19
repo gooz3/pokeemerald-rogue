@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ROM=${1:-pokeemerald.gba}
+ROM=${1:-emerogue.gba}
 TIMEOUT=${2:-60}
 MAP=${ROM%.gba}.map
 

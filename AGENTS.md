@@ -1,12 +1,14 @@
 # Agent notes: pokeemerald-rogue (gooz3 fork)
 
 Pokémon Emerald Rogue, a roguelike ROM hack built on the pret pokeemerald decomp.
+This fork tracks DepressoMocha's "Moka" fork (`depresso` remote, branch `2.1+moka-dev`), which is based on upstream's **expansion** branch, not vanilla.
 `INSTALL.md` and `README.md` are the stock pret docs and don't cover this fork's setup. Use this file instead.
 
 ## Repo layout
 
 - `origin` = `xgooz3x/pokeemerald-rogue` (our fork). Work on `gooz3-dev` (the default branch) or feature branches off it.
-- `upstream` = `Pokabbie/pokeemerald-rogue`. Local `vanilla` tracks `upstream/vanilla`. To pull upstream changes, run `git switch vanilla && git pull`, then merge into `gooz3-dev`.
+- `depresso` = `DepressoMocha/emerogue`. To pull Moka's changes (which include upstream expansion): `git fetch depresso && git merge depresso/2.1+moka-dev`.
+- `upstream` = `Pokabbie/pokeemerald-rogue`. To pull upstream changes directly, merge `upstream/expansion` (or `expansion-dev`) into `gooz3-dev`.
 - Rogue code is mostly `src/rogue_*.c`, `include/rogue*.h`, `include/constants/rogue.h`, and Poryscript in `data/scripts/Rogue/`.
 
 ## Build (NixOS)
@@ -14,10 +16,10 @@ Pokémon Emerald Rogue, a roguelike ROM hack built on the pret pokeemerald decom
 The dev machine runs NixOS. `shell.nix` provides the toolchain and mGBA.
 
 ```bash
-scripts/build_nix.sh             # debug ROM -> pokeemerald.gba (~10s incremental)
+scripts/build_nix.sh             # debug ROM -> emerogue.gba (~10s incremental)
 scripts/build_nix.sh RELEASE=1   # release ROM
 scripts/smoke_test_nix.sh        # headless mGBA boot; PASS = reached title screen
-nix-shell --run 'mgba-qt pokeemerald.gba'   # play it
+nix-shell --run 'mgba-qt emerogue.gba'   # play it
 ```
 
 Quirks the scripts already handle. Keep them in mind if you build some other way:
