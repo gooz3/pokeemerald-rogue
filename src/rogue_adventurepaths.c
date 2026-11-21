@@ -87,7 +87,6 @@ struct AdvPathSettings
     u8 numOfRooms[ADVPATH_ROOM_COUNT];
     struct Coords8 currentCoords;
     u8 totalLength;
-    u8 nodeCount;
 };
 
 
@@ -122,7 +121,7 @@ static bool8 ShouldBlockObjectEvent(struct RogueAdvPathRoom* room);
 static void BufferTypeAdjective(u8 type);
 
 static void GeneratePath(struct AdvPathSettings* pathSettings);
-static void GenerateFloorLayout(struct Coords8 currentCoords, struct AdvPathSettings* pathSettings);
+static bool8 GenerateFloorLayout(struct Coords8 currentCoords, struct AdvPathSettings* pathSettings, bool8 straightPath);
 static void GenerateRoomPlacements(struct AdvPathSettings* pathSettings);
 static void GenerateRoomInstance(u8 roomId, u8 roomType);
 static u8 CountRoomConnections(u8 mask);
@@ -170,7 +169,12 @@ static void GeneratePath(struct AdvPathSettings* pathSettings)
         gRogueAdvPath.pathLength = pathSettings->totalLength;
 
         START_TIMER(ROGUE_ADVPATH_GEN_LAYOUT);
-        GenerateFloorLayout(coords, pathSettings);
+        if(!GenerateFloorLayout(coords, pathSettings, FALSE))
+        {
+            // Start over with a connected path that uses one room per column.
+            gRogueAdvPath.roomCount = 0;
+            GenerateFloorLayout(coords, pathSettings, TRUE);
+        }
         STOP_TIMER(ROGUE_ADVPATH_GEN_LAYOUT);
 
         START_TIMER(ROGUE_ADVPATH_GEN_ROOM_PLACEMENT);
@@ -198,13 +202,13 @@ static void GeneratePath(struct AdvPathSettings* pathSettings)
     }
 }
 
-static void GenerateFloorLayout(struct Coords8 currentCoords, struct AdvPathSettings* pathSettings)
+static bool8 GenerateFloorLayout(struct Coords8 currentCoords, struct AdvPathSettings* pathSettings, bool8 straightPath)
 {
-    if(pathSettings->nodeCount >= ROGUE_ADVPATH_ROOM_CAPACITY)
+    if(gRogueAdvPath.roomCount >= ROGUE_ADVPATH_ROOM_CAPACITY)
     {
         // Cannot generate any more
         DebugPrint("ADVPATH: \tReached room/node capacity.");
-        return;
+        return FALSE;
     }
     else
     {
@@ -227,28 +231,33 @@ static void GenerateFloorLayout(struct Coords8 currentCoords, struct AdvPathSett
             newCoords.x = currentCoords.x + 1;
             newCoords.y = currentCoords.y;
 
-            connectionMask = GenerateRoomConnectionMask(currentCoords, pathSettings);
+            connectionMask = straightPath ? ROOM_CONNECTION_MASK_MID : GenerateRoomConnectionMask(currentCoords, pathSettings);
             gRogueAdvPath.rooms[nodeId].connectionMask = connectionMask;
 
             newCoords.y = currentCoords.y + 1;
             if((connectionMask & ROOM_CONNECTION_MASK_TOP) != 0 && !DoesRoomExists(newCoords.x, newCoords.y))
             {
-                GenerateFloorLayout(newCoords, pathSettings);
+                if(!GenerateFloorLayout(newCoords, pathSettings, straightPath))
+                    return FALSE;
             }
             
             newCoords.y = currentCoords.y + 0;
             if((connectionMask & ROOM_CONNECTION_MASK_MID) != 0 && !DoesRoomExists(newCoords.x, newCoords.y))
             {
-                GenerateFloorLayout(newCoords, pathSettings);
+                if(!GenerateFloorLayout(newCoords, pathSettings, straightPath))
+                    return FALSE;
             }
 
             newCoords.y = currentCoords.y - 1;
             if((connectionMask & ROOM_CONNECTION_MASK_BOT) != 0 && !DoesRoomExists(newCoords.x, newCoords.y))
             {
-                GenerateFloorLayout(newCoords, pathSettings);
+                if(!GenerateFloorLayout(newCoords, pathSettings, straightPath))
+                    return FALSE;
             }
         }
     }
+
+    return TRUE;
 }
 
 static bool8 IsPrecededByRoomType(struct RogueAdvPathRoom* room, u8 roomType)

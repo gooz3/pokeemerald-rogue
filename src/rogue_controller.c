@@ -8370,6 +8370,44 @@ static bool8 ForceRoamerMonSpawn()
     return FALSE;
 }
 
+static u16 SelectWildGrassEncounter(u8 count)
+{
+    u8 historyCount = ARRAY_COUNT(gRogueLocal.wildEncounterHistoryBuffer);
+    u16 candidates[WILD_ENCOUNTER_GRASS_CAPACITY];
+
+    if(count == 0)
+        return SPECIES_NONE;
+
+    if(count > historyCount && !GetSafariZoneFlag() && Rogue_GetActiveCampaign() != ROGUE_CAMPAIGN_LATERMANNER)
+    {
+        // A history filter must leave at least two distinct choices to keep the next spawn random.
+        // Ignore the oldest entries first when the pool is small or contains duplicates.
+        for(; historyCount > 0; --historyCount)
+        {
+            u8 i, candidateCount = 0;
+            bool8 hasDistinctChoices = FALSE;
+
+            for(i = 0; i < count; ++i)
+            {
+                u16 species = GetWildGrassEncounter(i);
+
+                if(HistoryBufferContains(gRogueLocal.wildEncounterHistoryBuffer, historyCount, species))
+                    continue;
+
+                if(candidateCount != 0 && species != candidates[0])
+                    hasDistinctChoices = TRUE;
+
+                candidates[candidateCount++] = species;
+            }
+
+            if(hasDistinctChoices)
+                return candidates[Random() % candidateCount];
+        }
+    }
+
+    return GetWildGrassEncounter(Random() % count);
+}
+
 void Rogue_CreateWildMon(u8 area, u16* species, u8* level, bool8* forceShiny)
 {
     if(Rogue_InWildSafari())
@@ -8434,10 +8472,6 @@ void Rogue_CreateWildMon(u8 area, u16* species, u8* level, bool8* forceShiny)
         }
         else
         {
-            u16 count = GetCurrentWildEncounterCount();
-            u16 historyBufferCount = ARRAY_COUNT(gRogueLocal.wildEncounterHistoryBuffer);
-            u16 randIdx;
-            
             if(ForceRoamerMonSpawn())
             {
                 *species = gRogueRun.wildEncounters.roamer.species;
@@ -8446,18 +8480,9 @@ void Rogue_CreateWildMon(u8 area, u16* species, u8* level, bool8* forceShiny)
                 return;
             }
 
-            do
-            {
-                // Prevent recent duplicates when on a run (Don't use this in safari mode though)
-                randIdx = Random() % count; 
-                *species = GetWildGrassEncounter(randIdx);
-
-                if(Rogue_GetActiveCampaign() == ROGUE_CAMPAIGN_LATERMANNER)
-                    break;
-            }
-            while(!GetSafariZoneFlag() && (count > historyBufferCount) && HistoryBufferContains(&gRogueLocal.wildEncounterHistoryBuffer[0], historyBufferCount, *species));
-
-            HistoryBufferPush(&gRogueLocal.wildEncounterHistoryBuffer[0], historyBufferCount, *species);
+            *species = SelectWildGrassEncounter(GetCurrentWildEncounterCount());
+            if(*species != SPECIES_NONE)
+                HistoryBufferPush(gRogueLocal.wildEncounterHistoryBuffer, ARRAY_COUNT(gRogueLocal.wildEncounterHistoryBuffer), *species);
         }
 
         *forceShiny = (shinyOdds == 0) ? FALSE : (Random() % shinyOdds) == 0;
