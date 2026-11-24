@@ -3,86 +3,105 @@ name: CI
 on:
   push:
     branches:
-      - vanilla
-      - vanilla-dev
-      - expansion
-      - expansion-dev
+      - gooz3-release
   pull_request:
     branches:
-      - vanilla
-      - vanilla-dev
-      - expansion
-      - expansion-dev
+      - gooz3-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  checks:
+    name: Script & PR checks
     runs-on: ubuntu-latest
-    container: devkitpro/devkitarm
-    env:
-      GAME_VERSION: EMERALD
-      GAME_REVISION: 0
-      GAME_LANGUAGE: ENGLISH
-      MODERN: 0
-      COMPARE: 0
-      UNUSED_ERROR: 0
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Checkout agbcc
+      - name: Lint shell scripts
+        run: |
+          shellcheck scripts/build_nix.sh scripts/smoke_test.sh scripts/smoke_test_nix.sh
+
+      - name: Check Python scripts
+        run: |
+          python3 -m py_compile scripts/memory_report.py
+
+      - name: Check save-layout headers on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          if grep -Eq '^(include/rogue\.h|include/global\.h)$' <<<"$CHANGED"; then
+            {
+              echo "### Save Layout Check"
+              echo ""
+              echo "> [!WARNING]"
+              echo "> This PR modifies \`include/rogue.h\` or \`include/global.h\`. Verify that \`gRogueSaveBlock\` / save struct layouts are unchanged (or bump \`ROGUE_SAVE_VERSION\` and update \`STATIC_ASSERT\` sizes accordingly)."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  build:
+    name: Build & Smoke (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Release
+            release: 1
+          - name: Debug
+            release: 0
+    steps:
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install toolchain and emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            build-essential \
+            libpng-dev \
+            libelf-dev \
+            zlib1g-dev \
+            unzip \
+            wget \
+            mgba-sdl
+
+      - name: Cache Poryscript & UPS tools
+        uses: actions/cache@v4
         with:
-          path: agbcc
-          repository: pret/agbcc
+          path: |
+            tools/poryscript
+            tools/ups
+          key: deps-${{ runner.os }}-${{ hashFiles('init_deps.sh') }}
 
-      - name: Install binutils
+      - name: Fetch build dependencies
+        run: ./init_deps.sh
+
+      - name: Build ${{ matrix.name }} ROM
         run: |
-          sudo apt update
-          sudo apt install -y build-essential libpng-dev libelf-dev
-        # build-essential, git, and libpng-dev are already installed
-        # gcc-arm-none-eabi is only needed for the modern build
-        # as an alternative to dkP
+          make -j"$(nproc)" -O MODERN=1 COMPARE=0 RELEASE=${{ matrix.release }} UNUSED_ERROR=0 all
 
-      - name: Install Dependencies
+      - name: Headless mGBA title-screen smoke test
+        run: scripts/smoke_test.sh emerogue.gba 60
+
+      - name: Memory usage report & headroom gate
         run: |
-          ./init_deps.sh
-
-      - name: Install agbcc
-        run: |
-          ./build.sh
-          ./install.sh ../
-        working-directory: agbcc
-
-      #- name: Agbcc
-      #  env:
-      #    MODERN: 0
-      #    COMPARE: 0
-      #  run: make -j${nproc} -O all
-
-      - name: Build Debug
-        env:
-          MODERN: 1
-          COMPARE: 0
-          RELEASE: 0
-        run: make -j${nproc} -O all
-
-      - name: Build Release
-        env:
-          MODERN: 1
-          COMPARE: 0
-          RELEASE: 1
-        run: make -j${nproc} -O all
-
-      - name: Update Memory Stats
-        uses: actions/upload-artifact@v4
-        with:
-          name: Memory Stats
-          path: pokeemerald_memorystats.csv
-
-      - name: Test
-        env:
-          MODERN: 1
-          TEST: 1
-        run: |
-          make -j${nproc} -O pokeemerald-test.elf
-          make -j${nproc} check
+          python3 scripts/memory_report.py emerogue.map \
+            --label "${{ matrix.name }}" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --max-ewram-pct 99.5 \
+            --max-iwram-pct 95.0 \
+            --max-rom-pct 99.5
