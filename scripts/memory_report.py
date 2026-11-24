@@ -56,6 +56,10 @@ def parse_map(map_path: pathlib.Path) -> dict[str, tuple[int, int]]:
                 if end > used[region]:
                     used[region] = end
 
+    empty = [r for r in EXPECTED_REGIONS if used[r] == 0]
+    if empty:
+        raise ValueError(f"No non-empty output sections found for {', '.join(empty)} in {map_path}")
+
     return {r: (used[r], regions[r][1]) for r in EXPECTED_REGIONS}
 
 
@@ -73,9 +77,14 @@ def main() -> int:
     parser.add_argument("--label", default="ROM", help="Build label for the Markdown heading")
     parser.add_argument("--summary", type=pathlib.Path, default=None, help="Append Markdown report to this file (e.g. $GITHUB_STEP_SUMMARY)")
     parser.add_argument("--max-ewram-pct", type=float, default=99.5)
-    parser.add_argument("--max-iwram-pct", type=float, default=95.0)
+    parser.add_argument("--max-iwram-pct", type=float, default=90.0)
     parser.add_argument("--max-rom-pct", type=float, default=99.5)
     args = parser.parse_args()
+
+    for region in ("ewram", "iwram", "rom"):
+        limit = getattr(args, f"max_{region}_pct")
+        if not 0.0 <= limit <= 100.0:
+            parser.error(f"--max-{region}-pct must be between 0 and 100")
 
     if not args.map_file.is_file():
         print(f"FAIL: Linker map not found: {args.map_file}", file=sys.stderr)

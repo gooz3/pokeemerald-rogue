@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +20,10 @@ jobs:
   checks:
     name: Script & PR checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,18 +36,18 @@ jobs:
         run: |
           python3 -m py_compile scripts/memory_report.py
 
-      - name: Check save-layout headers on PR
+      - name: Check save-layout files on PR
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
-          if grep -Eq '^(include/rogue\.h|include/global\.h)$' <<<"$CHANGED"; then
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[] | (.filename, (.previous_filename // empty))')
+          if grep -Eq '^(include/(rogue|global)\.h|src/rogue_save\.c)$' <<<"$CHANGED"; then
             {
-              echo "### Save Layout Check"
+              echo "### Save Compatibility Check"
               echo ""
               echo "> [!WARNING]"
-              echo "> This PR modifies \`include/rogue.h\` or \`include/global.h\`. Verify that \`gRogueSaveBlock\` / save struct layouts are unchanged (or bump \`ROGUE_SAVE_VERSION\` and update \`STATIC_ASSERT\` sizes accordingly)."
+              echo "> This PR modifies save-related code (\`include/rogue.h\`, \`include/global.h\`, or \`src/rogue_save.c\`). Verify field order, struct sizes, and serialized save compatibility — or bump \`ROGUE_SAVE_VERSION\` and update migration/assert logic."
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -52,6 +55,7 @@ jobs:
   build:
     name: Build & Smoke (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -88,9 +92,12 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('init_deps.sh') }}
 
       - name: Fetch build dependencies
-        run: ./init_deps.sh
+        run: |
+          ./init_deps.sh
+          test -x tools/poryscript/poryscript-linux/poryscript
 
       - name: Build ${{ matrix.name }} ROM
+        id: build_rom
         run: |
           make -j"$(nproc)" -O MODERN=1 COMPARE=0 RELEASE=${{ matrix.release }} UNUSED_ERROR=0 all
 
@@ -98,10 +105,11 @@ jobs:
         run: scripts/smoke_test.sh emerogue.gba 60
 
       - name: Memory usage report & headroom gate
+        if: ${{ !cancelled() && steps.build_rom.outcome == 'success' }}
         run: |
           python3 scripts/memory_report.py emerogue.map \
             --label "${{ matrix.name }}" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --max-ewram-pct 99.5 \
-            --max-iwram-pct 95.0 \
+            --max-iwram-pct 90.0 \
             --max-rom-pct 99.5
