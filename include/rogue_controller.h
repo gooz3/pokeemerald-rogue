@@ -110,6 +110,19 @@ bool8 IsDynamaxEnabled(void);
 bool8 IsTerastallizeEnabled(void);
 bool8 IsHealingFlaskEnabled(void);
 
+struct RoguePresetEnvContext
+{
+    u8 battleFormat;
+    bool8 megasEnabled;
+    bool8 zMovesEnabled;
+    bool8 teraEnabled;
+};
+
+void Rogue_InitPresetEnvContext(struct RoguePresetEnvContext* ctx);
+bool8 Rogue_PresetHasMove(struct RoguePokemonCompetitiveSet const* preset, u16 move);
+bool8 Rogue_IsPresetGimmickItemDisabled(u16 itemId, struct RoguePresetEnvContext const* env);
+bool8 Rogue_IsPresetGimmickMoveDisabled(struct RoguePokemonCompetitiveSet const* preset, struct RoguePresetEnvContext const* env);
+
 void Rogue_RandomiseStarters();
 void Rogue_ResetConfigHubSettings(void);
 void Rogue_OnNewGame(void);

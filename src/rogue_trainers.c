@@ -3334,33 +3334,28 @@ static bool8 ShouldBoostBattleGimickItems(struct TrainerPartyScratch* scratch)
 
 static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, u8 monIdx, struct RoguePokemonCompetitiveSet* outPreset)
 {
-    u8 i;
+    u16 i;
     struct RoguePokemonProfile const* pokemonProfile = Rogue_GetPokemonProfile(species);
     u16 presetCount = pokemonProfile->competitiveSetCount;
 
-    // Exact mirror copy trainer party
-    //if(sTrainerScratch->monGenerator.generatorFlags & TRAINER_GENERATOR_FLAG_MIRROR_EXACT)
-    //{
-    //    outPreset->allowMissingMoves = TRUE;
-    //    outPreset->heldItem = GetMonData(&gPlayerParty[monIdx], MON_DATA_HELD_ITEM);
-    //    outPreset->abilityNum = GetMonAbility(&gPlayerParty[monIdx]);
-    //    outPreset->hiddenPowerType = CalcMonHiddenPowerType(&gPlayerParty[monIdx]);
-    //    outPreset->flags = 0;
-//1
-    //    for(i = 0; i < MAX_MON_MOVES; ++i)
-    //        outPreset->moves[i] = GetMonData(&gPlayerParty[monIdx], MON_DATA_MOVE1 + i);
-//
-    //    return TRUE;
-    //}
-
     if(presetCount != 0)
     {
+        bool8 isDoubleBattle = (gBattleTypeFlags & BATTLE_TYPE_DOUBLE) != 0;
+#ifdef ROGUE_EXPANSION
+        struct RoguePresetEnvContext env;
+        bool8 boostGimmicks = ShouldBoostBattleGimickItems(scratch);
+        bool8 isRayquaza = (GET_BASE_SPECIES_ID(species) == SPECIES_RAYQUAZA);
+        Rogue_InitPresetEnvContext(&env);
+#endif
+
         {
             u32 currentScore;
             u32 bestScore = 0; // higher is better
             const struct RoguePokemonCompetitiveSet* currPreset = NULL;
             const struct RoguePokemonCompetitiveSet* bestPreset = NULL;
-            u8 randOffset = (presetCount == 1 ? 0 : RogueRandomRange(presetCount, FLAG_SET_SEED_TRAINERS));
+            u16 randOffset = (presetCount == 1 ? 0 : RogueRandomRange(presetCount, FLAG_SET_SEED_TRAINERS));
+            u16 lastCheckedItem = ITEM_NONE;
+            bool8 lastItemEnabled = TRUE;
             
             // Work from random offset and attempt to find the best preset which slots into this team
             // If none is found, we will use the last option and adjust below
@@ -3375,9 +3370,13 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
                     currentScore /= 2;
                 }
 
-                // Slightly prefer sets which are intended for this format
-                if(gBattleTypeFlags & BATTLE_TYPE_DOUBLE)
+                // Prefer sets which are intended for this format
+                if(isDoubleBattle)
                 {
+                    if((currPreset->flags & MON_FLAG_FORMAT_DOUBLES) != 0)
+                    {
+                        currentScore += 32;
+                    }
                     if((currPreset->flags & MON_FLAG_DOUBLES_STRONG) != 0)
                     {
                         currentScore += 32;
@@ -3385,6 +3384,10 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
                 }
                 else
                 {
+                    if((currPreset->flags & MON_FLAG_FORMAT_SINGLES) != 0)
+                    {
+                        currentScore += 32;
+                    }
                     if((currPreset->flags & MON_FLAG_SINGLES_STRONG) != 0)
                     {
                         currentScore += 32;
@@ -3417,9 +3420,9 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
                 // Special case for primal reversion
                 if(currPreset->heldItem == ITEM_RED_ORB || currPreset->heldItem == ITEM_BLUE_ORB)
                 {
-                    if(IsMegaEvolutionEnabled())
+                    if(env.megasEnabled)
                     {
-                        currentScore *= ShouldBoostBattleGimickItems(scratch) ? 32 : 4;
+                        currentScore *= boostGimmicks ? 32 : 4;
                     }
                     else
                     {
@@ -3428,12 +3431,12 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
                 }
         
                 // Special case for Rayquaza
-                if(IsMegaEvolutionEnabled() && GET_BASE_SPECIES_ID(species) == SPECIES_RAYQUAZA)
+                if(env.megasEnabled && isRayquaza)
                 {
-                    if(currPreset->moves[0] == MOVE_DRAGON_ASCENT || currPreset->moves[1] == MOVE_DRAGON_ASCENT || currPreset->moves[2] == MOVE_DRAGON_ASCENT || currPreset->moves[3] == MOVE_DRAGON_ASCENT)
+                    if(Rogue_PresetHasMove(currPreset, MOVE_DRAGON_ASCENT))
                     {
                         if(!scratch->heldItems.hasMegaStone)
-                            currentScore *= ShouldBoostBattleGimickItems(scratch) ? 32 : 4;
+                            currentScore *= boostGimmicks ? 32 : 4;
                         else
                             currentScore /= 4;
                     }
@@ -3442,10 +3445,10 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
                 // Handle megas
                 if(IS_MEGA_STONE(currPreset->heldItem))
                 {
-                    if(IsMegaEvolutionEnabled())
+                    if(env.megasEnabled)
                     {
                         if(!scratch->heldItems.hasMegaStone)
-                            currentScore *= ShouldBoostBattleGimickItems(scratch) ? 32 : 4;
+                            currentScore *= boostGimmicks ? 32 : 4;
                         else
                             currentScore /= 4;
                     }
@@ -3457,10 +3460,10 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
 
                 if(currPreset->heldItem >= ITEM_NORMALIUM_Z && currPreset->heldItem <= ITEM_ULTRANECROZIUM_Z)
                 {
-                    if(IsZMovesEnabled())
+                    if(env.zMovesEnabled)
                     {
                         if(!scratch->heldItems.hasZCrystal)
-                            currentScore *= ShouldBoostBattleGimickItems(scratch) ? 16 : 4;
+                            currentScore *= boostGimmicks ? 16 : 4;
                         else
                             currentScore /= 4;
                     }
@@ -3469,15 +3472,29 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
                         currentScore /= 4;
                     }
                 }
+
+                if(Rogue_IsPresetGimmickMoveDisabled(currPreset, &env))
+                {
+                    currentScore /= 4;
+                }
 #endif
                 // Prefer presets with items which are enabled
-                if(currPreset->heldItem != ITEM_NONE && !Rogue_IsItemEnabled(currPreset->heldItem))
+                if(currPreset->heldItem != ITEM_NONE)
                 {
-                    currentScore /= 2;
+                    if(currPreset->heldItem != lastCheckedItem)
+                    {
+                        lastCheckedItem = currPreset->heldItem;
+                        lastItemEnabled = Rogue_IsItemEnabled(currPreset->heldItem);
+                    }
+
+                    if(!lastItemEnabled)
+                    {
+                        currentScore /= 2;
+                    }
                 }
 
                 // Handle identical scores by adding on some random amount
-                // so we will essentially randomlly choose between the best sets and get more variety
+                // so we will essentially randomly choose between the best sets and get more variety
                 currentScore += RogueRandom() % 64;
 
                 if(bestPreset == NULL)
@@ -3549,7 +3566,7 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
             outPreset->heldItem = ITEM_SHELL_BELL;
         }
 
-        if(!IsMegaEvolutionEnabled())
+        if(!env.megasEnabled)
         {
             // Special case for primal reversion
             if(outPreset->heldItem == ITEM_RED_ORB || outPreset->heldItem == ITEM_BLUE_ORB)
@@ -3558,7 +3575,7 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
             }
         }
 
-        if(scratch->heldItems.hasMegaStone || !IsMegaEvolutionEnabled())
+        if(scratch->heldItems.hasMegaStone || !env.megasEnabled)
         {
             if(IS_MEGA_STONE(outPreset->heldItem))
             {
@@ -3566,7 +3583,7 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
             }
         }
 
-        if(scratch->heldItems.hasZCrystal || !IsZMovesEnabled())
+        if(scratch->heldItems.hasZCrystal || !env.zMovesEnabled)
         {
             if(outPreset->heldItem >= ITEM_NORMALIUM_Z && outPreset->heldItem <= ITEM_ULTRANECROZIUM_Z)
             {
@@ -3599,10 +3616,10 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
             scratch->heldItems.hasBlackSludge = TRUE;
 
             // Replace at last second, as we will allow multiple leftovers for this edge case
-            if(IsTerastallizeEnabled())
+            if(env.teraEnabled)
             {
                 // Avoid black sludge during tera because it's a bit silly
-                outPreset->heldItem == ITEM_LEFTOVERS;
+                outPreset->heldItem = ITEM_LEFTOVERS;
             }
         }
         else if(IS_MEGA_STONE(outPreset->heldItem))
@@ -3614,10 +3631,10 @@ static bool8 SelectNextPreset(struct TrainerPartyScratch* scratch, u16 species, 
             scratch->heldItems.hasZCrystal = TRUE;
         }
         
-        if(IsMegaEvolutionEnabled() && GET_BASE_SPECIES_ID(species) == SPECIES_RAYQUAZA)
+        if(env.megasEnabled && isRayquaza)
         {
             // Consider this as a mega stone
-            if(outPreset->moves[0] == MOVE_DRAGON_ASCENT || outPreset->moves[1] == MOVE_DRAGON_ASCENT || outPreset->moves[2] == MOVE_DRAGON_ASCENT || outPreset->moves[3] == MOVE_DRAGON_ASCENT)
+            if(Rogue_PresetHasMove(outPreset, MOVE_DRAGON_ASCENT))
                 scratch->heldItems.hasMegaStone = TRUE;
         }
 #endif
