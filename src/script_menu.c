@@ -19,6 +19,7 @@
 #include "strings.h"
 #include "task.h"
 #include "text.h"
+#include "constants/abilities.h"
 #include "constants/field_specials.h"
 #include "constants/items.h"
 #include "constants/rgb.h"
@@ -1106,10 +1107,45 @@ static u8 const sText_PresetMonMove_Has[] = _(" -{COLOR GREEN}{STR_VAR_1}");
 static u8 const sText_PresetMonMove_Missing[] = _(" -{COLOR RED}{STR_VAR_1}");
 static u8 const sText_PresetMonNoData[] = _("No recommendations for\nthis Pokémon.\n\n\n(This Pokémon may need\nto evolve in order to\nget recomendations)");
 
-static void PrintRecommendedMonSetToWindow(u8 windowId, struct Pokemon* mon, struct RoguePokemonCompetitiveSet const* preset)
+struct RecommendedMonSnapshot
+{
+    u16 species;
+    u16 ability;
+    u16 heldItem;
+    u16 moves[MAX_MON_MOVES];
+    u8 nature;
+};
+
+static void SnapshotMonForRecommendation(struct Pokemon* mon, struct RecommendedMonSnapshot* outSnap)
+{
+    u8 i;
+
+    outSnap->species = GetMonData(mon, MON_DATA_SPECIES, NULL);
+    outSnap->ability = GetMonAbility(mon);
+    outSnap->heldItem = GetMonData(mon, MON_DATA_HELD_ITEM, NULL);
+    outSnap->nature = GetNature(mon);
+
+    for(i = 0; i < MAX_MON_MOVES; ++i)
+        outSnap->moves[i] = GetMonData(mon, MON_DATA_MOVE1 + i, NULL);
+}
+
+static bool8 SnapshotKnowsMove(struct RecommendedMonSnapshot const* snap, u16 moveId)
+{
+    u8 i;
+
+    for(i = 0; i < MAX_MON_MOVES; ++i)
+    {
+        if(snap->moves[i] == moveId)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void PrintRecommendedMonSetToWindow(u8 windowId, struct RecommendedMonSnapshot const* snap, struct RoguePokemonCompetitiveSet const* preset)
 {
     u8 i, line;
-    gSpecialVar_Result = GetMonData(mon, MON_DATA_SPECIES, NULL);
+    gSpecialVar_Result = snap->species;
 
     FillWindowPixelBuffer(windowId, PIXEL_FILL(1));
     SetStandardWindowBorderStyle(windowId, 0);
@@ -1119,7 +1155,7 @@ static void PrintRecommendedMonSetToWindow(u8 windowId, struct Pokemon* mon, str
     if(preset != NULL)
     {
         // Ability
-        if(preset->ability == ITEM_NONE)
+        if(preset->ability == ABILITY_NONE)
         {
             StringCopyN(gStringVar1, gText_None, ABILITY_NAME_LENGTH);
             StringExpandPlaceholders(gStringVar4, sText_PresetMonAbility_Has);
@@ -1128,7 +1164,7 @@ static void PrintRecommendedMonSetToWindow(u8 windowId, struct Pokemon* mon, str
         else
         {
             StringCopyN(gStringVar1, gAbilityNames[preset->ability], ABILITY_NAME_LENGTH);
-            StringExpandPlaceholders(gStringVar4, GetMonAbility(mon) == preset->ability ? sText_PresetMonAbility_Has : sText_PresetMonAbility_Missing);
+            StringExpandPlaceholders(gStringVar4, snap->ability == preset->ability ? sText_PresetMonAbility_Has : sText_PresetMonAbility_Missing);
             AddTextPrinterParameterized(windowId, FONT_SMALL_NARROW, gStringVar4, 2, 12 * (line++), TEXT_SKIP_DRAW, NULL);
         }
 
@@ -1142,7 +1178,7 @@ static void PrintRecommendedMonSetToWindow(u8 windowId, struct Pokemon* mon, str
         else
         {
             StringCopyN(gStringVar1, ItemId_GetName(preset->heldItem), ITEM_NAME_LENGTH);
-            StringExpandPlaceholders(gStringVar4, GetMonData(mon, MON_DATA_HELD_ITEM) == preset->heldItem ? sText_PresetMonItem_Has : sText_PresetMonItem_Missing);
+            StringExpandPlaceholders(gStringVar4, snap->heldItem == preset->heldItem ? sText_PresetMonItem_Has : sText_PresetMonItem_Missing);
             AddTextPrinterParameterized(windowId, FONT_SMALL_NARROW, gStringVar4, 2, 12 * (line++), TEXT_SKIP_DRAW, NULL);
         }
 
@@ -1150,7 +1186,7 @@ static void PrintRecommendedMonSetToWindow(u8 windowId, struct Pokemon* mon, str
         if(preset->nature < NUM_NATURES)
         {
             StringCopy(gStringVar1, gNatureNamePointers[preset->nature]);
-            StringExpandPlaceholders(gStringVar4, GetNature(mon) == preset->nature ? sText_PresetMonNature_Has : sText_PresetMonNature_Missing);
+            StringExpandPlaceholders(gStringVar4, snap->nature == preset->nature ? sText_PresetMonNature_Has : sText_PresetMonNature_Missing);
             AddTextPrinterParameterized(windowId, FONT_SMALL_NARROW, gStringVar4, 2, 12 * (line++), TEXT_SKIP_DRAW, NULL);
         }
 
@@ -1162,7 +1198,7 @@ static void PrintRecommendedMonSetToWindow(u8 windowId, struct Pokemon* mon, str
             if(moveId != MOVE_NONE)
             {
                 StringCopy(gStringVar1, gMoveNames[moveId]);
-                StringExpandPlaceholders(gStringVar4, MonKnowsMove(mon, moveId) ? sText_PresetMonMove_Has : sText_PresetMonMove_Missing);
+                StringExpandPlaceholders(gStringVar4, SnapshotKnowsMove(snap, moveId) ? sText_PresetMonMove_Has : sText_PresetMonMove_Missing);
                 AddTextPrinterParameterized(windowId, FONT_SMALL_NARROW, gStringVar4, 2, 12 * (line++), TEXT_SKIP_DRAW, NULL);
             }
         }
@@ -1214,71 +1250,97 @@ static void Task_DisplayRecommendedMonSetInput(u8 taskId)
     }
 }
 
-static u32 CalculatePresetDisplayScore(struct Pokemon* mon, struct RoguePokemonCompetitiveSet const* preset)
+static u32 CalculatePresetDisplayScore(struct RecommendedMonSnapshot const* snap, struct RoguePresetEnvContext const* env, struct RoguePokemonCompetitiveSet const* preset, u16* lastCheckedItem, bool8* lastItemEnabled)
 {
     u8 i;
     u32 score = 0;
-    u32 temp;
+    bool8 itemDisabled = FALSE;
+
+    if(preset->heldItem != ITEM_NONE)
+    {
+        if(Rogue_IsPresetGimmickItemDisabled(preset->heldItem, env))
+        {
+            itemDisabled = TRUE;
+        }
+        else
+        {
+            if(preset->heldItem != *lastCheckedItem)
+            {
+                *lastCheckedItem = preset->heldItem;
+                *lastItemEnabled = Rogue_IsItemEnabled(preset->heldItem);
+            }
+
+            if(!(*lastItemEnabled))
+                itemDisabled = TRUE;
+        }
+    }
+
+    // Priority order (each tier strictly outweighs all lower tiers combined):
+    //   1. Legal held item (+256)
+    //   2. Legal gimmick moves (+128)
+    //   3. Matches active battle format (+64)
+    //   4. Similarity to current party mon (max +15 Expansion / +21 Vanilla)
+    if(!itemDisabled)
+        score += 256;
+
+    if(!Rogue_IsPresetGimmickMoveDisabled(preset, env))
+        score += 128;
+
+    if(env->battleFormat == BATTLE_FORMAT_SINGLES)
+    {
+        if((preset->flags & MON_FLAG_FORMAT_SINGLES) != 0)
+            score += 64;
+    }
+    else if(env->battleFormat == BATTLE_FORMAT_DOUBLES)
+    {
+        if((preset->flags & MON_FLAG_FORMAT_DOUBLES) != 0)
+            score += 64;
+    }
 
 #ifdef ROGUE_EXPANSION
-    if(GetNature(mon) == preset->nature)
+    if(preset->nature < NUM_NATURES && snap->nature == preset->nature)
         score += 3;
 
-    if(GetMonAbility(mon) == preset->ability)
+    if(preset->ability != ABILITY_NONE && snap->ability == preset->ability)
         score += 3;
 #else
     // Rate much higher, as cannot change in Vanilla
-    if(GetNature(mon) == preset->nature)
+    if(preset->nature < NUM_NATURES && snap->nature == preset->nature)
         score += 6;
 
-    if(GetMonAbility(mon) == preset->ability)
+    if(preset->ability != ABILITY_NONE && snap->ability == preset->ability)
         score += 6;
 #endif
 
-    temp = GetMonData(mon, MON_DATA_HELD_ITEM);
-    if(temp == preset->heldItem)
+    if(preset->heldItem != ITEM_NONE && snap->heldItem == preset->heldItem)
         score += 1;
-
-#ifdef ROGUE_EXPANSION
-    if((IS_MEGA_STONE(temp) || temp == ITEM_RED_ORB || temp == ITEM_BLUE_ORB) && !IsMegaEvolutionEnabled())
-    {
-        return 1;
-    }
-
-    if(temp >= ITEM_NORMALIUM_Z && temp <= ITEM_ULTRANECROZIUM_Z && !IsZMovesEnabled())
-    {
-        return 1;
-    }
-#endif
 
     for(i = 0; i < MAX_MON_MOVES; ++i)
     {
         u16 moveId = preset->moves[i];
 
-        if(moveId != MOVE_NONE)
-        {
-            if(MonKnowsMove(mon, moveId))
-                moveId += 2;
-        }
+        if(moveId != MOVE_NONE && SnapshotKnowsMove(snap, moveId))
+            score += 2;
     }
 
-    return score * 5;
+    return score;
 }
 
-static struct RoguePokemonCompetitiveSet const* SelectMonPreset(struct Pokemon* mon)
+static struct RoguePokemonCompetitiveSet const* SelectMonPreset(struct RecommendedMonSnapshot const* snap, struct RoguePresetEnvContext const* env)
 {
-    u16 species = GetMonData(mon, MON_DATA_SPECIES, NULL);
-    struct RoguePokemonProfile const* pokemonProfile = Rogue_GetPokemonProfile(species);
+    struct RoguePokemonProfile const* pokemonProfile = Rogue_GetPokemonProfile(snap->species);
 
     if(pokemonProfile->competitiveSetCount != 0)
     {
         u16 i;
         u16 bestIdx = 0;
-        u32 bestScore = CalculatePresetDisplayScore(mon, &pokemonProfile->competitiveSets[0]);
+        u16 lastCheckedItem = ITEM_NONE;
+        bool8 lastItemEnabled = TRUE;
+        u32 bestScore = CalculatePresetDisplayScore(snap, env, &pokemonProfile->competitiveSets[0], &lastCheckedItem, &lastItemEnabled);
 
         for(i = 1; i < pokemonProfile->competitiveSetCount; ++i)
         {
-            u32 score = CalculatePresetDisplayScore(mon, &pokemonProfile->competitiveSets[i]);
+            u32 score = CalculatePresetDisplayScore(snap, env, &pokemonProfile->competitiveSets[i], &lastCheckedItem, &lastItemEnabled);
 
             if(score > bestScore)
             {
@@ -1293,14 +1355,35 @@ static struct RoguePokemonCompetitiveSet const* SelectMonPreset(struct Pokemon* 
     return NULL;
 }
 
+static void Task_AbortRecommendedMonSet(u8 taskId)
+{
+    gSpecialVar_0x8004 = PARTY_SIZE;
+    ScriptContext_Enable();
+    DestroyTask(taskId);
+}
+
 void ScriptMenu_DisplayRecommendedMonSet()
 {
     u8 taskId;
-    struct Pokemon* mon = &gPlayerParty[gSpecialVar_0x8004];
-    struct RoguePokemonCompetitiveSet const* preset = SelectMonPreset(mon);
-    u8 windowId = CreateWindowFromRectWithBaseBlockOffset(12, 1, 14, 11, 8 * 8);
+    u8 windowId;
+    struct RecommendedMonSnapshot snap;
+    struct RoguePresetEnvContext env;
+    struct RoguePokemonCompetitiveSet const* preset;
 
-    PrintRecommendedMonSetToWindow(windowId, mon, preset);
+    if(gSpecialVar_0x8004 >= gPlayerPartyCount)
+    {
+        gSpecialVar_0x8004 = PARTY_SIZE;
+        CreateTask(Task_AbortRecommendedMonSet, 0);
+        return;
+    }
+
+    SnapshotMonForRecommendation(&gPlayerParty[gSpecialVar_0x8004], &snap);
+    Rogue_InitPresetEnvContext(&env);
+
+    preset = SelectMonPreset(&snap, &env);
+    windowId = CreateWindowFromRectWithBaseBlockOffset(12, 1, 14, 11, 8 * 8);
+
+    PrintRecommendedMonSetToWindow(windowId, &snap, preset);
 
     taskId = CreateTask(Task_DisplayRecommendedMonSetInput, 0);
     gTasks[taskId].data[0] = windowId;

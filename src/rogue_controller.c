@@ -2763,6 +2763,48 @@ bool8 IsHealingFlaskEnabled(void)
     return CheckBagHasItem(ITEM_HEALING_FLASK, 1);
 }
 
+void Rogue_InitPresetEnvContext(struct RoguePresetEnvContext* ctx)
+{
+    ctx->battleFormat = Rogue_GetConfigRange(CONFIG_RANGE_BATTLE_FORMAT);
+    ctx->megasEnabled = IsMegaEvolutionEnabled();
+    ctx->zMovesEnabled = IsZMovesEnabled();
+    ctx->teraEnabled = IsTerastallizeEnabled();
+}
+
+bool8 Rogue_PresetHasMove(struct RoguePokemonCompetitiveSet const* preset, u16 move)
+{
+    u8 i;
+
+    for(i = 0; i < MAX_MON_MOVES; ++i)
+    {
+        if(preset->moves[i] == move)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+bool8 Rogue_IsPresetGimmickItemDisabled(u16 itemId, struct RoguePresetEnvContext const* env)
+{
+#ifdef ROGUE_EXPANSION
+    if(!env->megasEnabled && (IS_MEGA_STONE(itemId) || itemId == ITEM_RED_ORB || itemId == ITEM_BLUE_ORB))
+        return TRUE;
+
+    if(!env->zMovesEnabled && (itemId >= ITEM_NORMALIUM_Z && itemId <= ITEM_ULTRANECROZIUM_Z))
+        return TRUE;
+#endif
+    return FALSE;
+}
+
+bool8 Rogue_IsPresetGimmickMoveDisabled(struct RoguePokemonCompetitiveSet const* preset, struct RoguePresetEnvContext const* env)
+{
+#ifdef ROGUE_EXPANSION
+    if(!env->teraEnabled && Rogue_PresetHasMove(preset, MOVE_TERA_BLAST))
+        return TRUE;
+#endif
+    return FALSE;
+}
+
 static bool8 IsRareShopActiveInternal()
 {
     u16 itemId;
@@ -8772,10 +8814,26 @@ void Rogue_ModifyWildMon(struct Pokemon* mon)
 
             if(presetCount != 0)
             {
+                u16 i;
+                u16 startIdx = Random() % presetCount;
+                struct RoguePresetEnvContext env;
                 struct RoguePokemonCompetitiveSetRules rules;
                 memset(&rules, 0, sizeof(rules));
+                rules.skipHeldItem = TRUE;
 
-                presetIndex = Random() % presetCount;
+                Rogue_InitPresetEnvContext(&env);
+                presetIndex = startIdx;
+
+                for(i = 0; i < presetCount; ++i)
+                {
+                    u16 candidate = (startIdx + i) % presetCount;
+                    if(!Rogue_IsPresetGimmickMoveDisabled(&pokemonProfile->competitiveSets[candidate], &env))
+                    {
+                        presetIndex = candidate;
+                        break;
+                    }
+                }
+
                 Rogue_ApplyMonCompetitiveSet(mon, GetMonData(mon, MON_DATA_LEVEL), &pokemonProfile->competitiveSets[presetIndex], &rules);
             }
 
