@@ -62,14 +62,18 @@ trap 'rm -rf "$TMPDIR"' EXIT
 TMP_ROM="$TMPDIR/$(basename -- "$ROM")"
 cp -- "$ROM" "$TMP_ROM"
 
-# Verify the ROM matches the ELF's binary image (ignoring any trailing gbafix padding).
+# Verify the ROM matches the ELF's binary image (either raw or padded via gbafix -p).
 ELF_ROM=$(mktemp "$TMPDIR/elf-rom.XXXXXXXX")
 if ! arm-none-eabi-objcopy -O binary -- "$ELF" "$ELF_ROM"; then
   echo "FAIL: could not extract ROM image from $ELF"
   exit 1
 fi
-ELF_ROM_SIZE=$(stat -c %s -- "$ELF_ROM")
-if [ "$ELF_ROM_SIZE" -eq 0 ] || ! cmp -s -n "$ELF_ROM_SIZE" -- "$ELF_ROM" "$TMP_ROM"; then
+if [ ! -s "$ELF_ROM" ] || {
+  ! cmp -s -- "$ELF_ROM" "$TMP_ROM" && {
+    ! "$REPO_ROOT/tools/gbafix/gbafix" "$ELF_ROM" -p --silent ||
+      ! cmp -s -- "$ELF_ROM" "$TMP_ROM"
+  }
+}; then
   echo "FAIL: ROM does not match ELF: $ROM and $ELF"
   exit 1
 fi
