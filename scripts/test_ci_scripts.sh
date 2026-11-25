@@ -134,9 +134,11 @@ fi
 # - EWRAM: 0x00038000 / 0x00040000 = 87.50% (includes NOLOAD section)
 # - IWRAM: (0x00004000 + 0x1c0) / 0x00008000 = 51.37% (includes wrapped section)
 # - ROM:   (0x09e00000 + 0x00010000 - 0x08000000) / 0x02000000 = 93.95% (excludes NOLOAD ROM LMA 0x09f00000)
+SUMMARY="$TMPDIR/summary.md"
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --label "Fixture" \
-  --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 95)
+  --summary "$SUMMARY" --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 95)
 
+printf '%s\n\n' "$OUT" | cmp -s - "$SUMMARY" || { echo "FAIL: summary does not match the memory report"; exit 1; }
 grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: EWRAM mismatch"; echo "$OUT"; exit 1; }
 grep -q "| \`IWRAM\` |.*\\*\\*51\\.37%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: IWRAM mismatch"; echo "$OUT"; exit 1; }
 grep -q "| \`ROM\` |.*\\*\\*93\\.95%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: ROM load-address mismatch"; echo "$OUT"; exit 1; }
@@ -145,6 +147,15 @@ status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --max-rom-pct 93.9 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q "| \`ROM\` |.*| FAIL |" <<<"$OUT"; then
   echo "FAIL: expected a ROM headroom failure (exit 1) when 93.95% > 93.9%"
+  echo "$OUT"
+  exit 1
+fi
+
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/overlap.elf" \
+  --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 3.12 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q "| \`ROM\` |.*\\*\\*3\\.125%\\*\\*.*| <= 3\\.12% | FAIL |" <<<"$OUT"; then
+  echo "FAIL: expected unrounded ROM percentage when rounding would hide failure"
   echo "$OUT"
   exit 1
 fi
@@ -250,6 +261,14 @@ status=0
 OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x08001234" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: .*exited before hitting Task_TitleScreenPhase3' <<<"$OUT"; then
   echo "FAIL: smoke_test.sh should reject breakpoint hit at wrong address"
+  echo "$OUT"
+  exit 1
+fi
+
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 0 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: timeout must be a positive integer number of seconds$' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should reject a zero timeout"
   echo "$OUT"
   exit 1
 fi

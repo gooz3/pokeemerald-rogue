@@ -191,9 +191,12 @@ def main() -> int:
         if over:
             failed = True
         status = "FAIL" if over else "PASS"
+        pct_display, gate_display = f"{pct:.2f}", f"{gate:g}"
+        if over and float(pct_display) <= float(gate_display):
+            pct_display, gate_display = str(pct), str(gate)
         lines.append(
             f"| `{region}` | {fmt_bytes(used)} | {fmt_bytes(capacity)} | "
-            f"{fmt_bytes(free)} | **{pct:.2f}%** | <= {gate:g}% | {status} |"
+            f"{fmt_bytes(free)} | **{pct_display}%** | <= {gate_display}% | {status} |"
         )
 
     report = "\n".join(lines) + "\n"
