@@ -6,14 +6,58 @@ from __future__ import annotations
 import argparse
 import pathlib
 import re
+import struct
 import sys
 
 EXPECTED_REGIONS = ("EWRAM", "IWRAM", "ROM")
+RAM_REGIONS = ("EWRAM", "IWRAM")
 # src/crt0.s sets sp_sys to IWRAM_END - 0x1c0 (IRQ stack + BIOS slots live above it).
 IWRAM_RESERVED_TOP_BYTES = 0x1C0
+PT_LOAD = 1
+ELF32_EHDR_SIZE = 52
+ELF32_PHDR_MIN_SIZE = 32
 
 
-def parse_map(map_path: pathlib.Path) -> dict[str, tuple[int, int]]:
+def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int) -> int:
+    with elf_path.open("rb") as fh:
+        ehdr = fh.read(ELF32_EHDR_SIZE)
+        if len(ehdr) < ELF32_EHDR_SIZE or ehdr[:4] != b"\x7fELF":
+            raise ValueError(f"Not a valid ELF file: {elf_path}")
+        if ehdr[4] != 1 or ehdr[5] != 1:
+            raise ValueError(f"Expected 32-bit little-endian ELF: {elf_path}")
+
+        _, _, _, _, e_phoff, _, _, _, e_phentsize, e_phnum, _, _, _ = struct.unpack_from(
+            "<HHIIIIIHHHHHH", ehdr, 16
+        )
+        if e_phnum == 0 or e_phnum == 0xFFFF or e_phentsize < ELF32_PHDR_MIN_SIZE:
+            raise ValueError(f"Invalid ELF program header table in {elf_path}")
+
+        table_size = e_phnum * e_phentsize
+        fh.seek(e_phoff)
+        table = fh.read(table_size)
+        if len(table) < table_size:
+            raise ValueError(f"Truncated ELF program header table in {elf_path}")
+
+    rom_used = 0
+    for idx in range(e_phnum):
+        p_type, _, _, p_paddr, p_filesz, p_memsz, _, _ = struct.unpack_from(
+            "<IIIIIIII", table, idx * e_phentsize
+        )
+        if p_type != PT_LOAD or p_filesz == 0:
+            continue
+        if p_filesz > p_memsz:
+            raise ValueError(f"Corrupt PT_LOAD segment (p_filesz > p_memsz) in {elf_path}")
+        if rom_origin <= p_paddr < rom_origin + rom_length:
+            end = (p_paddr + p_filesz) - rom_origin
+            if end > rom_used:
+                rom_used = end
+
+    if rom_used == 0:
+        raise ValueError(f"No file-backed ROM PT_LOAD segments found in {elf_path}")
+    return rom_used
+
+
+def parse_map(map_path: pathlib.Path, elf_path: pathlib.Path) -> dict[str, tuple[int, int]]:
     text = map_path.read_text(encoding="utf-8", errors="replace")
 
     cfg_match = re.search(
@@ -41,32 +85,31 @@ def parse_map(map_path: pathlib.Path) -> dict[str, tuple[int, int]]:
 
     used: dict[str, int] = {r: 0 for r in EXPECTED_REGIONS}
 
-    # Match top-level output sections (column 0), handling both single-line,
-    # wrapped-line, and optional GNU ld `load address 0x...` formats.
+    # Match top-level output sections (column 0), handling both single-line and
+    # wrapped-line formats, using RAM VMAs for EWRAM/IWRAM accounting.
     section_re = re.compile(
-        r"^([.\w-]+)(?:[ \t]+|\n[ \t]+)(0x[0-9a-fA-F]+)[ \t]+(0x[0-9a-fA-F]+)"
-        r"(?:[ \t]+load address[ \t]+(0x[0-9a-fA-F]+))?",
+        r"^([.\w-]+)(?:[ \t]+|\n[ \t]+)(0x[0-9a-fA-F]+)[ \t]+(0x[0-9a-fA-F]+)",
         re.MULTILINE,
     )
     for m in section_re.finditer(body):
         addr = int(m.group(2), 16)
         size = int(m.group(3), 16)
-        load_addr = int(m.group(4), 16) if m.group(4) else addr
         if size == 0:
             continue
-        for region, (origin, length) in regions.items():
-            addresses = (addr, load_addr) if region == "ROM" else (addr,)
-            for start in addresses:
-                if origin <= start < origin + length:
-                    end = (start + size) - origin
-                    if end > used[region]:
-                        used[region] = end
+        for region in RAM_REGIONS:
+            origin, length = regions[region]
+            if origin <= addr < origin + length:
+                end = (addr + size) - origin
+                if end > used[region]:
+                    used[region] = end
 
-    empty = [r for r in EXPECTED_REGIONS if used[r] == 0]
-    if empty:
-        raise ValueError(f"No non-empty output sections found for {', '.join(empty)} in {map_path}")
+    empty_ram = [r for r in RAM_REGIONS if used[r] == 0]
+    if empty_ram:
+        raise ValueError(f"No non-empty output sections found for {', '.join(empty_ram)} in {map_path}")
 
     used["IWRAM"] += IWRAM_RESERVED_TOP_BYTES
+    rom_origin, rom_length = regions["ROM"]
+    used["ROM"] = parse_elf_rom_used(elf_path, rom_origin, rom_length)
 
     return {r: (used[r], regions[r][1]) for r in EXPECTED_REGIONS}
 
@@ -82,6 +125,12 @@ def fmt_bytes(n: int) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("map_file", nargs="?", default="emerogue.map", type=pathlib.Path)
+    parser.add_argument(
+        "--elf",
+        type=pathlib.Path,
+        default=None,
+        help="Matching ELF file for file-backed ROM load ranges (defaults to sibling .elf)",
+    )
     parser.add_argument("--label", default="ROM", help="Build label for the Markdown heading")
     parser.add_argument("--summary", type=pathlib.Path, default=None, help="Append Markdown report to this file (e.g. $GITHUB_STEP_SUMMARY)")
     parser.add_argument("--max-ewram-pct", type=float, default=99.5)
@@ -98,6 +147,11 @@ def main() -> int:
         print(f"FAIL: Linker map not found: {args.map_file}", file=sys.stderr)
         return 1
 
+    elf_path = args.elf if args.elf is not None else args.map_file.with_suffix(".elf")
+    if not elf_path.is_file():
+        print(f"FAIL: Matching ELF not found: {elf_path}", file=sys.stderr)
+        return 1
+
     limits = {
         "EWRAM": args.max_ewram_pct,
         "IWRAM": args.max_iwram_pct,
@@ -105,7 +159,7 @@ def main() -> int:
     }
 
     try:
-        stats = parse_map(args.map_file)
+        stats = parse_map(args.map_file, elf_path)
     except (OSError, ValueError) as exc:
         print(f"FAIL: Could not read memory usage from {args.map_file}: {exc}", file=sys.stderr)
         return 1

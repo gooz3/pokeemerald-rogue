@@ -6,8 +6,9 @@ REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-# --- 1. memory_report.py: wrapped section + RAM section loaded from ROM + gate fail ---
+# --- 1. memory_report.py: wrapped IWRAM section + initialized RAM data + NOLOAD with ROM LMA + gate fail ---
 MAP="$TMPDIR/fixture.map"
+ELF="$TMPDIR/fixture.elf"
 cat > "$MAP" <<'EOF'
 Memory Configuration
 
@@ -26,16 +27,36 @@ iwram           0x03000000    0x00002000
 .text           0x08000000    0x01000000
 .ram_loaded_from_rom
                 0x02020000    0x00010000 load address 0x09e00000
+.ram_noload_with_rom_lma
+                0x02030000    0x00008000 load address 0x09f00000
 EOF
 
-# Expected high-water marks:
-# - EWRAM: 0x00030000 / 0x00040000 = 75.00%
-# - IWRAM: (0x00004000 + 0x1c0) / 0x00008000 = 51.37%
-# - ROM:   (0x09e00000 + 0x00010000 - 0x08000000) / 0x02000000 = 0x01e10000 / 0x02000000 = 93.95%
-OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --label "Fixture" \
-  --max-ewram-pct 80 --max-iwram-pct 60 --max-rom-pct 95)
+python3 - "$ELF" <<'PY'
+import pathlib, struct, sys
 
-grep -q "| \`EWRAM\` |.*\\*\\*75\\.00%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: EWRAM mismatch"; echo "$OUT"; exit 1; }
+# Minimal valid 32-bit little-endian ELF with three PT_LOAD segments:
+# 1. .text in ROM (file-backed)
+# 2. .ram_loaded_from_rom: EWRAM VMA, ROM LMA 0x09e00000, file-backed 0x10000 -> counts in ROM
+# 3. .ram_noload_with_rom_lma: EWRAM VMA, ROM LMA 0x09f00000, filesz 0, memsz 0x8000 -> ignored for ROM
+phdrs = [
+    (1, 0, 0x08000000, 0x08000000, 0x01000000, 0x01000000, 5, 4),
+    (1, 0, 0x02020000, 0x09E00000, 0x00010000, 0x00010000, 6, 4),
+    (1, 0, 0x02030000, 0x09F00000, 0x00000000, 0x00008000, 6, 4),
+]
+e_ident = b"\x7fELF\x01\x01\x01" + b"\x00" * 9
+ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52, 0, 0, 52, 32, len(phdrs), 0, 0, 0)
+body = b"".join(struct.pack("<IIIIIIII", *p) for p in phdrs)
+pathlib.Path(sys.argv[1]).write_bytes(ehdr + body)
+PY
+
+# Expected high-water marks:
+# - EWRAM: 0x00038000 / 0x00040000 = 87.50% (includes NOLOAD section)
+# - IWRAM: (0x00004000 + 0x1c0) / 0x00008000 = 51.37% (includes wrapped section)
+# - ROM:   (0x09e00000 + 0x00010000 - 0x08000000) / 0x02000000 = 93.95% (excludes NOLOAD ROM LMA 0x09f00000)
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --label "Fixture" \
+  --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 95)
+
+grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: EWRAM mismatch"; echo "$OUT"; exit 1; }
 grep -q "| \`IWRAM\` |.*\\*\\*51\\.37%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: IWRAM mismatch"; echo "$OUT"; exit 1; }
 grep -q "| \`ROM\` |.*\\*\\*93\\.95%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: ROM load-address mismatch"; echo "$OUT"; exit 1; }
 
@@ -48,6 +69,7 @@ if [ "$status" -ne 1 ] || ! grep -q "| \`ROM\` |.*| FAIL |" <<<"$OUT"; then
 fi
 
 : > "$TMPDIR/empty.map"
+cp "$ELF" "$TMPDIR/empty.elf"
 status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/empty.map" 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: Could not read memory usage from ' <<<"$OUT"; then
@@ -56,7 +78,7 @@ if [ "$status" -ne 1 ] || ! grep -q '^FAIL: Could not read memory usage from ' <
   exit 1
 fi
 
-# --- 2. smoke_test.sh: ELF match, gbafix -p fallback, debugger commands, and breakpoint matching ---
+# --- 2. smoke_test.sh: ELF match, gbafix -p fallback, debugger commands, timeout, exit status ---
 STUB_BIN="$TMPDIR/bin"
 mkdir -p "$STUB_BIN"
 
@@ -87,8 +109,11 @@ if [[ "$commands" != $'break 0x0820bdb0\ncontinue\nquit' ]]; then
   printf 'Unexpected debugger commands:\n%s\n' "$commands" >&2
   exit 1
 fi
+if [[ ${STUB_HANG:-0} == 1 ]]; then
+  exec sleep 3
+fi
 echo "Hit breakpoint 1 at ${STUB_HIT_ADDR}"
-exit 0
+exit "${STUB_EXIT_STATUS:-0}"
 EOF
 
 chmod +x "$STUB_BIN/arm-none-eabi-nm" "$STUB_BIN/arm-none-eabi-objcopy" "$STUB_BIN/gbafix" "$STUB_BIN/mgba"
@@ -113,6 +138,22 @@ if [ "$status" -ne 1 ] || ! grep -q '^FAIL: .*exited before hitting Task_TitleSc
   exit 1
 fi
 
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" STUB_HANG=1 "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 1 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: mGBA timed out after 1s waiting for Task_TitleScreenPhase3$' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should fail with timeout diagnostic when mGBA hangs"
+  echo "$OUT"
+  exit 1
+fi
+
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" STUB_EXIT_STATUS=42 "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: mGBA exited with status 42$' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should reject a failed emulator even after a matching breakpoint"
+  echo "$OUT"
+  exit 1
+fi
+
 if ! PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 >/dev/null 2>&1; then
   echo "FAIL: smoke_test.sh should accept breakpoint hit at matching address"
   exit 1
@@ -120,6 +161,14 @@ fi
 
 printf 'FAKE_ROM_BYTESPADDING' > "$TMPDIR/padded.gba"
 printf 'FAKE_ROM_BYTES' > "$TMPDIR/padded.elf"
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$TMPDIR/missing-gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/padded.gba" 10 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: cannot verify ROM padding:' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should report missing gbafix separately from ROM/ELF mismatch"
+  echo "$OUT"
+  exit 1
+fi
+
 if ! PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/padded.gba" 10 >/dev/null 2>&1; then
   echo "FAIL: smoke_test.sh should accept padded ROM via gbafix -p fallback"
   exit 1

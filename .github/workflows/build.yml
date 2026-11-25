@@ -52,8 +52,20 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          TOTAL_FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" --jq '.changed_files')
+          PR_META=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" --jq '[.head.sha, .changed_files] | @tsv')
+          IFS=$'\t' read -r PR_HEAD_SHA TOTAL_FILES <<<"$PR_META"
+          if [ "$PR_HEAD_SHA" != "$EVENT_HEAD_SHA" ]; then
+            {
+              echo "### Save Compatibility Check"
+              echo ""
+              echo "> [!WARNING]"
+              echo "> This PR's head moved (\`${PR_HEAD_SHA}\` != \`${EVENT_HEAD_SHA}\`) since this workflow run started. Manually verify whether save-related files were modified in this revision."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" --paginate --jq '.[] | (.filename, (.previous_filename // empty))')
           if [ "$TOTAL_FILES" -gt 3000 ]; then
             {
@@ -64,7 +76,7 @@ jobs:
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-          if grep -Eq '^(include/((config|rogue|rogue_save|global|global\.(berry|fieldmap|tv)|save|pokemon_storage_system|pokemon)|config/(battle|debug|item|pokemon|overworld)|constants/(global|flags|vars|rogue|rogue_hub|rogue_pokedex|rogue_quests|game_stat|tv|species|pokedex|berry|items|maps|moves|pokemon|easy_chat|trainer_hill))\.h|src/(rogue_save|save)\.c)$' <<<"$CHANGED"; then
+          if grep -Eq '^(include/((config|rogue|rogue_save|global|global\.(berry|fieldmap|tv)|save|pokemon_storage_system|pokemon)|config/(battle|debug|item|pokemon|overworld)|constants/(global|flags|vars|rogue|rogue_hub|rogue_pokedex|rogue_quests|game_stat|tv|species|pokedex|berry|items|maps|map_groups|layouts|moves|pokemon|easy_chat|trainer_hill|generated/(decorations|quests|quest_consts|custom_mons)))\.h|src/(rogue_save|save)\.c|data/maps/map_groups\.json|data/layouts/layouts\.json|src/data/rogue/((decorations|quests)(\.json|/[^/]+\.json)|custom_mons\.json))$' <<<"$CHANGED"; then
             {
               echo "### Save Compatibility Check"
               echo ""

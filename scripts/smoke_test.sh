@@ -69,14 +69,23 @@ if ! arm-none-eabi-objcopy -O binary -- "$ELF" "$ELF_ROM"; then
   exit 1
 fi
 GBAFIX=${GBAFIX:-"$REPO_ROOT/tools/gbafix/gbafix"}
-if [ ! -s "$ELF_ROM" ] || {
-  ! cmp -s -- "$ELF_ROM" "$TMP_ROM" && {
-    ! { [ -x "$GBAFIX" ] && "$GBAFIX" "$ELF_ROM" -p --silent; } ||
-      ! cmp -s -- "$ELF_ROM" "$TMP_ROM"
-  }
-}; then
-  echo "FAIL: ROM does not match ELF: $ROM and $ELF"
+if [ ! -s "$ELF_ROM" ]; then
+  echo "FAIL: extracted ROM image is empty: $ELF"
   exit 1
+fi
+if ! cmp -s -- "$ELF_ROM" "$TMP_ROM"; then
+  if [ ! -x "$GBAFIX" ]; then
+    echo "FAIL: cannot verify ROM padding: gbafix is not executable at $GBAFIX"
+    exit 1
+  fi
+  if ! "$GBAFIX" "$ELF_ROM" -p --silent; then
+    echo "FAIL: gbafix could not pad the ROM image extracted from $ELF"
+    exit 1
+  fi
+  if ! cmp -s -- "$ELF_ROM" "$TMP_ROM"; then
+    echo "FAIL: ROM does not match ELF: $ROM and $ELF"
+    exit 1
+  fi
 fi
 
 # mGBA's CLI debugger: break once the title screen is ready for input, run, and quit once hit.
