@@ -56,9 +56,8 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
         segment_end = p_paddr + p_filesz
         if segment_end <= rom_origin:
             raise ValueError(f"File-backed PT_LOAD segment ends before ROM in {elf_path}")
-        # Only a segment that maps the ELF/program headers may start below ROM.
-        if p_paddr < rom_origin and (p_offset != 0 or rom_origin - p_paddr < e_phoff + table_size):
-            raise ValueError(f"Non-header PT_LOAD segment starts before ROM in {elf_path}")
+        if p_paddr < rom_origin:
+            raise ValueError(f"File-backed PT_LOAD segment starts before ROM in {elf_path}")
         if p_paddr >= rom_origin + rom_length:
             raise ValueError(f"File-backed PT_LOAD segment starts beyond ROM in {elf_path}")
         rom_used = max(rom_used, segment_end - rom_origin)
@@ -157,7 +156,6 @@ def main() -> int:
         if not 0.0 < limit < 100.0:
             parser.error(f"--max-{region}-pct must be strictly between 0 and 100")
 
-    elf_path = args.elf if args.elf is not None else args.map_file.with_suffix(".elf")
     limits = {
         "EWRAM": args.max_ewram_pct,
         "IWRAM": args.max_iwram_pct,
@@ -168,6 +166,7 @@ def main() -> int:
         if not args.map_file.is_file():
             print(f"FAIL: Linker map not found: {args.map_file}", file=sys.stderr)
             return 1
+        elf_path = args.elf if args.elf is not None else args.map_file.with_suffix(".elf")
         if not elf_path.is_file():
             print(f"FAIL: Matching ELF not found: {elf_path}", file=sys.stderr)
             return 1

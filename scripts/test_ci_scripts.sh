@@ -55,15 +55,15 @@ with pathlib.Path(sys.argv[1]).with_name("truncated.elf").open("wb") as fixture:
     fixture.truncate(file_size - 1)
 pathlib.Path(sys.argv[1]).with_name("truncated-table.elf").write_bytes(ehdr + body[:-1])
 
-# Single PT_LOAD segment starting before rom_origin (FILEHDR/PHDRS style) and extending into ROM to 0x08100000 (3.12%).
-overlap_phdr = struct.pack("<IIIIIIII", 1, 0, 0x07FFFF80, 0x07FFFF80, 0x00100080, 0x00100080, 5, 4)
+# Single PT_LOAD segment at rom_origin extending to 0x08100000 (3.125%).
+overlap_phdr = struct.pack("<IIIIIIII", 1, 0x80, 0x08000000, 0x08000000, 0x00100000, 0x00100000, 5, 4)
 overlap_ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52, 0, 0, 52, 32, 1, 0, 0, 0)
 with pathlib.Path(sys.argv[1]).with_name("overlap.elf").open("wb") as fixture:
     fixture.write(overlap_ehdr + overlap_phdr)
     fixture.truncate(0x00100080)
 
-# Same layout, but a payload segment (nonzero file offset) loads below ROM.
-payload_phdr = struct.pack("<IIIIIIII", 1, 0x80, 0x07FFFF80, 0x07FFFF80, 0x00100080, 0x00100080, 5, 4)
+# Header-bearing segment (offset 0) that starts below rom_origin and runs into ROM.
+payload_phdr = struct.pack("<IIIIIIII", 1, 0, 0x07FFFF80, 0x07FFFF80, 0x00100080, 0x00100080, 5, 4)
 with pathlib.Path(sys.argv[1]).with_name("pre-rom-payload.elf").open("wb") as fixture:
     fixture.write(overlap_ehdr + payload_phdr)
     fixture.truncate(0x00100100)
@@ -125,12 +125,12 @@ fi
 
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/overlap.elf" \
   --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 10)
-grep -q "| \`ROM\` |.*\\*\\*3\\.12%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: pre-ROM overlap segment mismatch"; echo "$OUT"; exit 1; }
+grep -q "| \`ROM\` |.*\\*\\*3\\.12%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: ROM-origin segment mismatch"; echo "$OUT"; exit 1; }
 
 status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/pre-rom-payload.elf" 2>&1) || status=$?
-if [ "$status" -ne 1 ] || ! grep -q 'Non-header PT_LOAD segment starts before ROM' <<<"$OUT"; then
-  echo "FAIL: expected a payload PT_LOAD segment below ROM to be rejected"
+if [ "$status" -ne 1 ] || ! grep -q 'File-backed PT_LOAD segment starts before ROM' <<<"$OUT"; then
+  echo "FAIL: expected a PT_LOAD segment starting below ROM to be rejected"
   echo "$OUT"
   exit 1
 fi
@@ -213,6 +213,7 @@ if [ "$status" -ne 1 ] || ! grep -q '^FAIL: Could not write memory summary to ' 
 fi
 
 # --- 2. smoke_test.sh: ELF match, gbafix -p fallback, debugger commands, timeout, exit status ---
+unset DEVKITARM
 STUB_BIN="$TMPDIR/bin"
 mkdir -p "$STUB_BIN"
 
@@ -259,10 +260,10 @@ if [[ "$commands" != $'break 0x0820bdb0\ncontinue\nquit' ]]; then
 fi
 if [[ ${STUB_IGNORE_TERM:-0} == 1 ]]; then
   trap '' TERM
-  exec sleep 10
+  exec sleep infinity
 fi
 if [[ ${STUB_HANG:-0} == 1 ]]; then
-  exec sleep 3
+  exec sleep infinity
 fi
 echo "Hit breakpoint 1 at ${STUB_HIT_ADDR}"
 exit "${STUB_EXIT_STATUS:-0}"
