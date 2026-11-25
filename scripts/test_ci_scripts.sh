@@ -35,9 +35,9 @@ EOF
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --label "Fixture" \
   --max-ewram-pct 80 --max-iwram-pct 60 --max-rom-pct 95)
 
-grep -q '| `EWRAM` |.*\*\*75\.00%\*\*.*| PASS |' <<<"$OUT" || { echo "FAIL: EWRAM mismatch"; echo "$OUT"; exit 1; }
-grep -q '| `IWRAM` |.*\*\*51\.37%\*\*.*| PASS |' <<<"$OUT" || { echo "FAIL: IWRAM mismatch"; echo "$OUT"; exit 1; }
-grep -q '| `ROM` |.*\*\*93\.95%\*\*.*| PASS |' <<<"$OUT" || { echo "FAIL: ROM load-address mismatch"; echo "$OUT"; exit 1; }
+grep -q "| \`EWRAM\` |.*\\*\\*75\\.00%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: EWRAM mismatch"; echo "$OUT"; exit 1; }
+grep -q "| \`IWRAM\` |.*\\*\\*51\\.37%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: IWRAM mismatch"; echo "$OUT"; exit 1; }
+grep -q "| \`ROM\` |.*\\*\\*93\\.95%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: ROM load-address mismatch"; echo "$OUT"; exit 1; }
 
 if python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --max-rom-pct 93.9 >/dev/null 2>&1; then
   echo "FAIL: memory_report.py should have failed when ROM (93.95%) > 93.9%"
