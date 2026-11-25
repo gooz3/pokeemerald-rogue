@@ -83,8 +83,11 @@ jobs:
           . /etc/os-release
           echo "scope=${ID}-${VERSION_ID}-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
           # Hash the exact .debs APT plans to download, so a package update opens a new cache entry.
+          # Plan against the same archive dir the install uses, so system-cached .debs aren't omitted.
+          archives="$RUNNER_TEMP/ci-apt-archives"
+          mkdir -p "$archives/partial"
           plan=$(xargs -a "$RUNNER_TEMP/ci-apt-packages" \
-            apt-get install --print-uris -qq --no-install-recommends | awk '{print $2}' | sort | sha256sum | cut -c1-16)
+            sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends | awk '{print $2}' | sort | sha256sum | cut -c1-16)
           echo "package_plan_hash=$plan" >> "$GITHUB_OUTPUT"
 
       # Cache downloaded .debs only; packages are installed normally each run.
@@ -93,14 +96,11 @@ jobs:
         with:
           path: ${{ runner.temp }}/ci-apt-archives/*.deb
           key: ci-apt-${{ steps.apt_cache.outputs.scope }}-${{ runner.arch }}-${{ steps.apt_cache.outputs.package_plan_hash }}
-          restore-keys: |
-            ci-apt-${{ steps.apt_cache.outputs.scope }}-${{ runner.arch }}-
 
       - name: Install toolchain and emulator
         run: |
           set -euo pipefail
           archives="$RUNNER_TEMP/ci-apt-archives"
-          mkdir -p "$archives/partial"
           xargs -a "$RUNNER_TEMP/ci-apt-packages" sudo apt-get -o Dir::Cache::archives="$archives" \
             -o APT::Keep-Downloaded-Packages=true \
             install -y --no-install-recommends

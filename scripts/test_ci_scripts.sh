@@ -198,7 +198,9 @@ sed '/^Linker script and memory map/,$ { /^ewram[[:blank:]]/d; /^\.ram_/{ N; d; 
 sed '/^Linker script and memory map/,$ { /^iwram[[:blank:]]/d; /^\.iwram\$/{ N; d; }; }' "$MAP" > "$TMPDIR/missing-iwram.map"
 cp "$TMPDIR/missing-ewram.map" "$TMPDIR/zero-size-ewram.map"
 printf '%s\n' 'ewram           0x02001000    0x00000000' >> "$TMPDIR/zero-size-ewram.map"
-for case in missing-ewram:EWRAM zero-size-ewram:EWRAM missing-iwram:IWRAM; do
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/input-only-ewram.map"
+printf '%s\n' ' .bss.fixture   0x02001000    0x00000004 fixture.o' >> "$TMPDIR/input-only-ewram.map"
+for case in missing-ewram:EWRAM zero-size-ewram:EWRAM input-only-ewram:EWRAM missing-iwram:IWRAM; do
   fixture=${case%:*}
   region=${case#*:}
   status=0
@@ -209,6 +211,12 @@ for case in missing-ewram:EWRAM zero-size-ewram:EWRAM missing-iwram:IWRAM; do
     exit 1
   fi
 done
+
+# A zero-sized output section above the high-water mark is ignored, not counted or rejected.
+cp "$MAP" "$TMPDIR/mixed-size-ewram.map"
+printf '%s\n' '.ram_empty      0x0203f000    0x00000000' >> "$TMPDIR/mixed-size-ewram.map"
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/mixed-size-ewram.map" --elf "$ELF" --max-ewram-pct 90)
+grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: zero-sized section changed EWRAM usage"; echo "$OUT"; exit 1; }
 
 : > "$TMPDIR/empty.map"
 cp "$ELF" "$TMPDIR/empty.elf"
