@@ -61,6 +61,17 @@ overlap_ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52,
 with pathlib.Path(sys.argv[1]).with_name("overlap.elf").open("wb") as fixture:
     fixture.write(overlap_ehdr + overlap_phdr)
     fixture.truncate(0x00100080)
+
+# One in-range ROM segment plus a file-backed segment starting at rom_origin + rom_length (0x0A000000).
+beyond_phdrs = [
+    (1, 0x100, 0x08000000, 0x08000000, 0x00100000, 0x00100000, 5, 4),
+    (1, 0x00100100, 0x0A000000, 0x0A000000, 0x00001000, 0x00001000, 4, 4),
+]
+beyond_ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52, 0, 0, 52, 32, len(beyond_phdrs), 0, 0, 0)
+beyond_body = b"".join(struct.pack("<IIIIIIII", *p) for p in beyond_phdrs)
+with pathlib.Path(sys.argv[1]).with_name("beyond-rom.elf").open("wb") as fixture:
+    fixture.write(beyond_ehdr + beyond_body)
+    fixture.truncate(0x00101100)
 PY
 
 status=0
@@ -75,6 +86,14 @@ status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/truncated.elf" 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q 'Truncated PT_LOAD segment' <<<"$OUT"; then
   echo "FAIL: expected truncated ELF payload to be rejected"
+  echo "$OUT"
+  exit 1
+fi
+
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/beyond-rom.elf" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'File-backed PT_LOAD segment starts beyond ROM' <<<"$OUT"; then
+  echo "FAIL: expected file-backed PT_LOAD segment beyond ROM to be rejected"
   echo "$OUT"
   exit 1
 fi
@@ -264,6 +283,19 @@ WRAPPER_ROM=$(realpath --relative-to="$REPO_ROOT" -- "$TMPDIR/wrapper test.gba")
 if ! OUT=$(cd -- "$TMPDIR" && PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" \
   "$REPO_ROOT/scripts/smoke_test_nix.sh" "$WRAPPER_ROM" 10 2>&1); then
   echo "FAIL: smoke_test_nix.sh should accept a repository-relative ROM path containing spaces"
+  echo "$OUT"
+  exit 1
+fi
+
+cat > "$STUB_BIN/arm-none-eabi-objcopy" <<'EOF'
+#!/usr/bin/env bash
+exit 42
+EOF
+chmod +x "$STUB_BIN/arm-none-eabi-objcopy"
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: could not extract ROM image from ' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should reject an objcopy failure"
   echo "$OUT"
   exit 1
 fi

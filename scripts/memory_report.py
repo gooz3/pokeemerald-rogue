@@ -53,7 +53,9 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
         if p_offset + p_filesz > file_size:
             raise ValueError(f"Truncated PT_LOAD segment in {elf_path}")
         segment_end = p_paddr + p_filesz
-        if p_paddr < rom_origin + rom_length and segment_end > rom_origin:
+        if p_paddr >= rom_origin + rom_length:
+            raise ValueError(f"File-backed PT_LOAD segment starts beyond ROM in {elf_path}")
+        if segment_end > rom_origin:
             end = segment_end - rom_origin
             if end > rom_used:
                 rom_used = end
