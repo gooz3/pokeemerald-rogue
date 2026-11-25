@@ -76,6 +76,7 @@ jobs:
         id: apt_cache
         run: |
           set -euo pipefail
+          export LC_ALL=C  # sort and join must agree on collation
           printf '%s\n' gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
             build-essential libpng-dev libelf-dev zlib1g-dev unzip wget mgba-sdl \
             > "$RUNNER_TEMP/ci-apt-packages"
@@ -88,11 +89,22 @@ jobs:
           xargs -a "$RUNNER_TEMP/ci-apt-packages" \
             sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends \
             > "$RUNNER_TEMP/ci-apt-plan"
-          # "<algo> <digest> <file>" for each planned .deb, from the signed package index.
-          awk '{ algo = ""
-                 for (i = 4; i <= NF; i++) if ($i ~ /^SHA(256|512):/) { split($i, h, ":"); algo = tolower(h[1]); digest = h[2] }
-                 if (algo == "") { print "no SHA-256/512 digest in APT plan line: " $0 > "/dev/stderr"; exit 1 }
-                 print algo, digest, $2 }' "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-sha256"
+          # "<sha256> <file>" for each planned .deb. --print-uris may only give MD5, so take SHA256
+          # from the signed package records, matched on the pool file name.
+          awk '{ uri = $1; gsub(/\047/, "", uri); sub(/.*\//, "", uri)
+                 gsub(/%2[bB]/, "+", uri); gsub(/%3[aA]/, ":", uri); gsub(/%7[eE]/, "~", uri); print uri, $2 }' \
+            "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-files"
+          awk '{ split($2, p, "_"); print p[1] }' "$RUNNER_TEMP/ci-apt-plan" | sort -u \
+            | xargs apt-cache show \
+            | awk '/^Filename:/ { f = $2; sub(/.*\//, "", f) } /^SHA256:/ { print f, $2 }' \
+            | sort -u > "$RUNNER_TEMP/ci-apt-index"
+          join "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index" \
+            | awk '{ print $3, $2 }' | sort > "$RUNNER_TEMP/ci-apt-sha256"
+          if [ "$(wc -l < "$RUNNER_TEMP/ci-apt-sha256")" -ne "$(wc -l < "$RUNNER_TEMP/ci-apt-files")" ]; then
+            echo "Could not find a SHA256 for every planned package:"
+            join -v1 "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index"
+            exit 1
+          fi
           # Key on names and digests, so any package update opens a new cache entry.
           echo "package_plan_hash=$(sha256sum < "$RUNNER_TEMP/ci-apt-sha256" | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
@@ -111,9 +123,8 @@ jobs:
           shopt -s nullglob
           for deb in "$archives"/*.deb; do
             name=${deb##*/}
-            read -r algo expected _ < <(awk -v n="$name" '$3 == n' "$RUNNER_TEMP/ci-apt-sha256") || true
-            actual=""
-            [ -n "${algo:-}" ] && actual=$("${algo}sum" < "$deb" | cut -d' ' -f1)
+            expected=$(awk -v n="$name" '$2 == n { print $1 }' "$RUNNER_TEMP/ci-apt-sha256")
+            actual=$(sha256sum < "$deb" | cut -d' ' -f1)
             if [ -z "${expected:-}" ] || [ "$actual" != "$expected" ]; then
               echo "Discarding unverified cached archive: $name"
               sudo rm -f -- "$deb"
