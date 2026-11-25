@@ -39,22 +39,26 @@ def parse_map(map_path: pathlib.Path) -> dict[str, tuple[int, int]]:
 
     used: dict[str, int] = {r: 0 for r in EXPECTED_REGIONS}
 
-    # Match top-level output sections (column 0), handling both single-line
-    # and GNU ld wrapped-line formats (when the section name is long).
+    # Match top-level output sections (column 0), handling both single-line,
+    # wrapped-line, and optional GNU ld `load address 0x...` formats.
     section_re = re.compile(
-        r"^([.\w-]+)(?:[ \t]+|\n[ \t]+)(0x[0-9a-fA-F]+)[ \t]+(0x[0-9a-fA-F]+)",
+        r"^([.\w-]+)(?:[ \t]+|\n[ \t]+)(0x[0-9a-fA-F]+)[ \t]+(0x[0-9a-fA-F]+)"
+        r"(?:[ \t]+load address[ \t]+(0x[0-9a-fA-F]+))?",
         re.MULTILINE,
     )
     for m in section_re.finditer(body):
         addr = int(m.group(2), 16)
         size = int(m.group(3), 16)
+        load_addr = int(m.group(4), 16) if m.group(4) else addr
         if size == 0:
             continue
         for region, (origin, length) in regions.items():
-            if origin <= addr < origin + length:
-                end = (addr + size) - origin
-                if end > used[region]:
-                    used[region] = end
+            addresses = (addr, load_addr) if region == "ROM" else (addr,)
+            for start in addresses:
+                if origin <= start < origin + length:
+                    end = (start + size) - origin
+                    if end > used[region]:
+                        used[region] = end
 
     empty = [r for r in EXPECTED_REGIONS if used[r] == 0]
     if empty:
@@ -83,8 +87,8 @@ def main() -> int:
 
     for region in ("ewram", "iwram", "rom"):
         limit = getattr(args, f"max_{region}_pct")
-        if not 0.0 <= limit <= 100.0:
-            parser.error(f"--max-{region}-pct must be between 0 and 100")
+        if not 0.0 < limit < 100.0:
+            parser.error(f"--max-{region}-pct must be strictly between 0 and 100")
 
     if not args.map_file.is_file():
         print(f"FAIL: Linker map not found: {args.map_file}", file=sys.stderr)
@@ -111,7 +115,7 @@ def main() -> int:
         free = capacity - used
         pct = (used / capacity) * 100.0
         gate = limits[region]
-        over = pct >= 100.0 or pct > gate
+        over = pct > gate
         if over:
             failed = True
         status = "FAIL" if over else "PASS"

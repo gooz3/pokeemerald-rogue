@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Boot the ROM headless in mGBA (via shell.nix) and check it reaches the title screen.
+# Boot the ROM headless in mGBA (via shell.nix) and check it reaches the interactive title screen.
 # Usage: scripts/smoke_test_nix.sh [rom] [timeout_seconds]
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
-if [ $# -ge 1 ]; then
-  ROM=$(realpath -m "$1")
+if [ -n "${1:-}" ]; then
+  case "$1" in
+    /*) ROM=$1 ;;
+    *) ROM="$PWD/$1" ;;
+  esac
 else
   ROM="$REPO_ROOT/emerogue.gba"
 fi
