@@ -86,14 +86,16 @@ jobs:
           # Plan against the same (still empty) archive dir the install uses, so every needed .deb is listed.
           archives="$RUNNER_TEMP/ci-apt-archives"
           mkdir -p "$archives/partial"
+          # Everything below only feeds the cache; on any failure, skip caching and let the install run.
+          skip() { echo "::warning::Skipping APT archive caching: $1"; exit 0; }
           xargs -a "$RUNNER_TEMP/ci-apt-packages" \
             sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends \
-            > "$RUNNER_TEMP/ci-apt-plan"
+            > "$RUNNER_TEMP/ci-apt-plan" || skip "could not list package URIs"
           # "<sha256> <file>" for each planned .deb. --print-uris may only give MD5, so take SHA256
           # from the signed package records, matched on the pool file name.
           awk '{ uri = $1; gsub(/\047/, "", uri); sub(/.*\//, "", uri)
                  gsub(/%2[bB]/, "+", uri); gsub(/%3[aA]/, ":", uri); gsub(/%7[eE]/, "~", uri); print uri, $2 }' \
-            "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-files"
+            "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-files" || skip "could not parse the package plan"
           awk '{ split($2, p, "_"); print p[1] }' "$RUNNER_TEMP/ci-apt-plan" | sort -u \
             | xargs -r apt-cache show \
             | awk 'function emit() { if (f != "" && sha != "") print f, sha; f = sha = "" }
@@ -101,7 +103,7 @@ jobs:
                    /^Filename:/ { f = $2; sub(/.*\//, "", f) }
                    /^SHA256:/ { sha = $2 }
                    END { emit() }' \
-            | sort -u > "$RUNNER_TEMP/ci-apt-index"
+            | sort -u > "$RUNNER_TEMP/ci-apt-index" || skip "could not read package metadata"
           # Every planned archive needs exactly one digest; otherwise skip caching and let APT download.
           if ! join -a 1 "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index" \
             | awk 'NF != 3 || seen[$2]++ {
@@ -112,8 +114,7 @@ jobs:
                    { print $3, $2 }
                    END { exit bad }' \
             | sort > "$RUNNER_TEMP/ci-apt-sha256"; then
-            : > "$RUNNER_TEMP/ci-apt-sha256"
-            echo "Skipping APT archive caching: could not verify the package plan."
+            skip "could not verify the package plan"
           fi
           # Nothing to download (all preinstalled): skip the cache, leaving package_plan_hash unset.
           [ -s "$RUNNER_TEMP/ci-apt-sha256" ] || exit 0
@@ -123,6 +124,7 @@ jobs:
       - name: Restore APT packages
         id: apt_restore
         if: steps.apt_cache.outputs.package_plan_hash != ''
+        continue-on-error: true
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/ci-apt-archives/*.deb
@@ -139,7 +141,7 @@ jobs:
             expected=$(awk -v n="$name" '$2 == n { print $1 }' "$RUNNER_TEMP/ci-apt-sha256")
             actual=$(sha256sum < "$deb" | cut -d' ' -f1)
             if [ -z "${expected:-}" ] || [ "$actual" != "$expected" ]; then
-              echo "Discarding unverified cached archive: $name"
+              echo "::warning::Discarding unverified cached archive $name from cache key ${{ steps.apt_restore.outputs.cache-primary-key }}; evict that entry."
               sudo rm -f -- "$deb"
             fi
           done
