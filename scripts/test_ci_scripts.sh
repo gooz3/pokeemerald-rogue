@@ -193,15 +193,22 @@ for gate in EWRAM:87 IWRAM:55; do
   fi
 done
 
-# Valid memory table and IWRAM/ROM sections, but no EWRAM output sections: must fail closed, not report 0%.
+# Valid memory table but a RAM region with no (or only zero-sized) output sections: must fail closed, not report 0%.
 sed '/^Linker script and memory map/,$ { /^ewram[[:blank:]]/d; /^\.ram_/{ N; d; }; }' "$MAP" > "$TMPDIR/missing-ewram.map"
-status=0
-OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/missing-ewram.map" --elf "$ELF" 2>&1) || status=$?
-if [ "$status" -ne 1 ] || ! grep -q 'No non-empty output sections found for EWRAM' <<<"$OUT"; then
-  echo "FAIL: expected a map with no EWRAM output sections to be rejected"
-  echo "$OUT"
-  exit 1
-fi
+sed '/^Linker script and memory map/,$ { /^iwram[[:blank:]]/d; /^\.iwram\$/{ N; d; }; }' "$MAP" > "$TMPDIR/missing-iwram.map"
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/zero-size-ewram.map"
+printf '%s\n' 'ewram           0x02001000    0x00000000' >> "$TMPDIR/zero-size-ewram.map"
+for case in missing-ewram:EWRAM zero-size-ewram:EWRAM missing-iwram:IWRAM; do
+  fixture=${case%:*}
+  region=${case#*:}
+  status=0
+  OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/$fixture.map" --elf "$ELF" 2>&1) || status=$?
+  if [ "$status" -ne 1 ] || ! grep -q "No non-empty output sections found for $region in" <<<"$OUT"; then
+    echo "FAIL: expected $fixture.map to be rejected for $region"
+    echo "$OUT"
+    exit 1
+  fi
+done
 
 : > "$TMPDIR/empty.map"
 cp "$ELF" "$TMPDIR/empty.elf"
