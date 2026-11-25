@@ -193,6 +193,47 @@ for gate in EWRAM:87 IWRAM:55; do
   fi
 done
 
+# Valid memory table but a RAM region with no (or only zero-sized) output sections: must fail closed, not report 0%.
+sed '/^Linker script and memory map$/q' "$MAP" > "$TMPDIR/missing-ewram.map"
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/missing-iwram.map"
+printf '\n%s\n' 'iwram           0x03000000    0x00002000' >> "$TMPDIR/missing-ewram.map"
+printf '\n%s\n' 'ewram           0x02000000    0x00020000' >> "$TMPDIR/missing-iwram.map"
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/zero-size-ewram.map"
+printf '%s\n' 'ewram           0x02001000    0x00000000' >> "$TMPDIR/zero-size-ewram.map"
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/input-only-ewram.map"
+printf '%s\n' ' .bss.fixture   0x02001000    0x00000004 fixture.o' >> "$TMPDIR/input-only-ewram.map"
+for case in missing-ewram:EWRAM zero-size-ewram:EWRAM input-only-ewram:EWRAM missing-iwram:IWRAM; do
+  fixture=${case%:*}
+  region=${case#*:}
+  status=0
+  OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/$fixture.map" --elf "$TMPDIR/overlap.elf" 2>&1) || status=$?
+  if [ "$status" -ne 1 ] || ! grep -q "No non-empty output sections found for $region in" <<<"$OUT"; then
+    echo "FAIL: expected $fixture.map to be rejected for $region"
+    echo "$OUT"
+    exit 1
+  fi
+done
+
+# A zero-sized output section above the high-water mark is ignored, not counted or rejected.
+cp "$MAP" "$TMPDIR/mixed-size-ewram.map"
+printf '%s\n' '.ram_empty      0x0203f000    0x00000000' >> "$TMPDIR/mixed-size-ewram.map"
+if ! OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/mixed-size-ewram.map" --elf "$ELF" --max-ewram-pct 90 2>&1) ||
+  ! grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT"; then
+  echo "FAIL: expected EWRAM to remain at 87.50% with a zero-sized section"
+  echo "$OUT"
+  exit 1
+fi
+
+# The smallest valid section (one byte at the region origin) is counted and accepted.
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/one-byte-ewram.map"
+printf '%s\n' 'ewram           0x02000000    0x00000001' >> "$TMPDIR/one-byte-ewram.map"
+if ! OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/one-byte-ewram.map" --elf "$TMPDIR/overlap.elf" 2>&1) ||
+  ! grep -Fq "| \`EWRAM\` | 1 B |" <<<"$OUT"; then
+  echo "FAIL: expected a one-byte EWRAM section to be counted and accepted"
+  echo "$OUT"
+  exit 1
+fi
+
 : > "$TMPDIR/empty.map"
 cp "$ELF" "$TMPDIR/empty.elf"
 status=0
