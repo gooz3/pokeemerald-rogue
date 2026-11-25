@@ -102,12 +102,18 @@ jobs:
                    /^SHA256:/ { sha = $2 }
                    END { emit() }' \
             | sort -u > "$RUNNER_TEMP/ci-apt-index"
-          join "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index" \
-            | awk '{ print $3, $2 }' | sort > "$RUNNER_TEMP/ci-apt-sha256"
-          if [ "$(wc -l < "$RUNNER_TEMP/ci-apt-sha256")" -ne "$(wc -l < "$RUNNER_TEMP/ci-apt-files")" ]; then
-            echo "Could not find a SHA256 for every planned package:"
-            join -v1 "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index"
-            exit 1
+          # Every planned archive needs exactly one digest; otherwise skip caching and let APT download.
+          if ! join -a 1 "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index" \
+            | awk 'NF != 3 || seen[$2]++ {
+                     print "Missing or ambiguous SHA256 for " $2 > "/dev/stderr"
+                     bad = 1
+                     next
+                   }
+                   { print $3, $2 }
+                   END { exit bad }' \
+            | sort > "$RUNNER_TEMP/ci-apt-sha256"; then
+            : > "$RUNNER_TEMP/ci-apt-sha256"
+            echo "Skipping APT archive caching: could not verify the package plan."
           fi
           # Nothing to download (all preinstalled): skip the cache, leaving package_plan_hash unset.
           [ -s "$RUNNER_TEMP/ci-apt-sha256" ] || exit 0

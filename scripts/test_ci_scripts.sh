@@ -194,8 +194,10 @@ for gate in EWRAM:87 IWRAM:55; do
 done
 
 # Valid memory table but a RAM region with no (or only zero-sized) output sections: must fail closed, not report 0%.
-sed '/^Linker script and memory map/,$ { /^ewram[[:blank:]]/d; /^\.ram_/{ N; d; }; }' "$MAP" > "$TMPDIR/missing-ewram.map"
-sed '/^Linker script and memory map/,$ { /^iwram[[:blank:]]/d; /^\.iwram\$/{ N; d; }; }' "$MAP" > "$TMPDIR/missing-iwram.map"
+sed '/^Linker script and memory map$/q' "$MAP" > "$TMPDIR/missing-ewram.map"
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/missing-iwram.map"
+printf '\n%s\n' 'iwram           0x03000000    0x00002000' >> "$TMPDIR/missing-ewram.map"
+printf '\n%s\n' 'ewram           0x02000000    0x00020000' >> "$TMPDIR/missing-iwram.map"
 cp "$TMPDIR/missing-ewram.map" "$TMPDIR/zero-size-ewram.map"
 printf '%s\n' 'ewram           0x02001000    0x00000000' >> "$TMPDIR/zero-size-ewram.map"
 cp "$TMPDIR/missing-ewram.map" "$TMPDIR/input-only-ewram.map"
@@ -204,7 +206,7 @@ for case in missing-ewram:EWRAM zero-size-ewram:EWRAM input-only-ewram:EWRAM mis
   fixture=${case%:*}
   region=${case#*:}
   status=0
-  OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/$fixture.map" --elf "$ELF" 2>&1) || status=$?
+  OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/$fixture.map" --elf "$TMPDIR/overlap.elf" 2>&1) || status=$?
   if [ "$status" -ne 1 ] || ! grep -q "No non-empty output sections found for $region in" <<<"$OUT"; then
     echo "FAIL: expected $fixture.map to be rejected for $region"
     echo "$OUT"
@@ -225,7 +227,7 @@ fi
 # The smallest valid section (one byte at the region origin) is counted and accepted.
 cp "$TMPDIR/missing-ewram.map" "$TMPDIR/one-byte-ewram.map"
 printf '%s\n' 'ewram           0x02000000    0x00000001' >> "$TMPDIR/one-byte-ewram.map"
-if ! OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/one-byte-ewram.map" --elf "$ELF" 2>&1) ||
+if ! OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/one-byte-ewram.map" --elf "$TMPDIR/overlap.elf" 2>&1) ||
   ! grep -Fq "| \`EWRAM\` | 1 B |" <<<"$OUT"; then
   echo "FAIL: expected a one-byte EWRAM section to be counted and accepted"
   echo "$OUT"
