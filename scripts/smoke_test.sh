@@ -68,9 +68,10 @@ if ! arm-none-eabi-objcopy -O binary -- "$ELF" "$ELF_ROM"; then
   echo "FAIL: could not extract ROM image from $ELF"
   exit 1
 fi
+GBAFIX=${GBAFIX:-"$REPO_ROOT/tools/gbafix/gbafix"}
 if [ ! -s "$ELF_ROM" ] || {
   ! cmp -s -- "$ELF_ROM" "$TMP_ROM" && {
-    ! "$REPO_ROOT/tools/gbafix/gbafix" "$ELF_ROM" -p --silent ||
+    ! { [ -x "$GBAFIX" ] && "$GBAFIX" "$ELF_ROM" -p --silent; } ||
       ! cmp -s -- "$ELF_ROM" "$TMP_ROM"
   }
 }; then

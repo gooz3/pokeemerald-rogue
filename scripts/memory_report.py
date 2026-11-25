@@ -104,7 +104,11 @@ def main() -> int:
         "ROM": args.max_rom_pct,
     }
 
-    stats = parse_map(args.map_file)
+    try:
+        stats = parse_map(args.map_file)
+    except (OSError, ValueError) as exc:
+        print(f"FAIL: Could not read memory usage from {args.map_file}: {exc}", file=sys.stderr)
+        return 1
 
     lines = [
         f"### Memory Usage ({args.label})",

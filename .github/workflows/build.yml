@@ -64,7 +64,7 @@ jobs:
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-          if grep -Eq '^(include/((rogue|rogue_save|global|global\.berry|save|pokemon_storage_system|pokemon)|constants/(global|flags|vars|rogue|rogue_hub|game_stat|tv|species))\.h|src/(rogue_save|save)\.c)$' <<<"$CHANGED"; then
+          if grep -Eq '^(include/((config|rogue|rogue_save|global|global\.(berry|fieldmap|tv)|save|pokemon_storage_system|pokemon)|config/(battle|debug|item|pokemon|overworld)|constants/(global|flags|vars|rogue|rogue_hub|rogue_pokedex|rogue_quests|game_stat|tv|species|pokedex|berry|items|maps|moves|pokemon|easy_chat|trainer_hill))\.h|src/(rogue_save|save)\.c)$' <<<"$CHANGED"; then
             {
               echo "### Save Compatibility Check"
               echo ""
