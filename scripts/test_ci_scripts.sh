@@ -215,8 +215,22 @@ done
 # A zero-sized output section above the high-water mark is ignored, not counted or rejected.
 cp "$MAP" "$TMPDIR/mixed-size-ewram.map"
 printf '%s\n' '.ram_empty      0x0203f000    0x00000000' >> "$TMPDIR/mixed-size-ewram.map"
-OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/mixed-size-ewram.map" --elf "$ELF" --max-ewram-pct 90)
-grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: zero-sized section changed EWRAM usage"; echo "$OUT"; exit 1; }
+if ! OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/mixed-size-ewram.map" --elf "$ELF" --max-ewram-pct 90 2>&1) ||
+  ! grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT"; then
+  echo "FAIL: expected EWRAM to remain at 87.50% with a zero-sized section"
+  echo "$OUT"
+  exit 1
+fi
+
+# The smallest valid section (one byte at the region origin) is counted and accepted.
+cp "$TMPDIR/missing-ewram.map" "$TMPDIR/one-byte-ewram.map"
+printf '%s\n' 'ewram           0x02000000    0x00000001' >> "$TMPDIR/one-byte-ewram.map"
+if ! OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/one-byte-ewram.map" --elf "$ELF" 2>&1) ||
+  ! grep -Fq "| \`EWRAM\` | 1 B |" <<<"$OUT"; then
+  echo "FAIL: expected a one-byte EWRAM section to be counted and accepted"
+  echo "$OUT"
+  exit 1
+fi
 
 : > "$TMPDIR/empty.map"
 cp "$ELF" "$TMPDIR/empty.elf"

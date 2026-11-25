@@ -82,17 +82,21 @@ jobs:
           sudo apt-get update
           . /etc/os-release
           echo "scope=${ID}-${VERSION_ID}-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
-          # Hash the exact .debs APT plans to download, so a package update opens a new cache entry.
-          # Plan against the same archive dir the install uses, so system-cached .debs aren't omitted.
+          # Plan against the same (still empty) archive dir the install uses, so every needed .deb is listed.
           archives="$RUNNER_TEMP/ci-apt-archives"
           mkdir -p "$archives/partial"
-          plan=$(xargs -a "$RUNNER_TEMP/ci-apt-packages" \
-            sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends | awk '{print $2}' | sort | sha256sum | cut -c1-16)
-          echo "package_plan_hash=$plan" >> "$GITHUB_OUTPUT"
+          xargs -a "$RUNNER_TEMP/ci-apt-packages" \
+            sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends \
+            > "$RUNNER_TEMP/ci-apt-plan"
+          # "<sha256>  <file>" for each planned .deb, from the signed package index.
+          awk '{ if ($4 !~ /^SHA256:/) { print "missing SHA256 for " $2 > "/dev/stderr"; exit 1 }
+                 print substr($4, 8) "  " $2 }' "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-sha256"
+          # Key on names and digests, so any package update opens a new cache entry.
+          echo "package_plan_hash=$(sha256sum < "$RUNNER_TEMP/ci-apt-sha256" | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
-      # Cache downloaded .debs only; packages are installed normally each run.
-      - name: Cache APT packages
-        uses: actions/cache@v4
+      - name: Restore APT packages
+        id: apt_restore
+        uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/ci-apt-archives/*.deb
           key: ci-apt-${{ steps.apt_cache.outputs.scope }}-${{ runner.arch }}-${{ steps.apt_cache.outputs.package_plan_hash }}
@@ -101,9 +105,28 @@ jobs:
         run: |
           set -euo pipefail
           archives="$RUNNER_TEMP/ci-apt-archives"
+          # APT trusts a cached .deb whose size matches, so check restored files against the index digests.
+          shopt -s nullglob
+          for deb in "$archives"/*.deb; do
+            name=${deb##*/}
+            expected=$(awk -v n="$name" '$2 == n { print $1 }' "$RUNNER_TEMP/ci-apt-sha256")
+            actual=$(sha256sum < "$deb" | cut -c1-64)
+            if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+              echo "Discarding unverified cached archive: $name"
+              sudo rm -f -- "$deb"
+            fi
+          done
           xargs -a "$RUNNER_TEMP/ci-apt-packages" sudo apt-get -o Dir::Cache::archives="$archives" \
             -o APT::Keep-Downloaded-Packages=true \
             install -y --no-install-recommends
+
+      # Save right after install so later build/test failures don't discard the download.
+      - name: Save APT packages
+        if: steps.apt_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ci-apt-archives/*.deb
+          key: ${{ steps.apt_restore.outputs.cache-primary-key }}
 
       - name: Cache Linux Poryscript archive
         uses: actions/cache@v4
