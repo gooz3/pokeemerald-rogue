@@ -37,16 +37,19 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
         table = fh.read(table_size)
         if len(table) < table_size:
             raise ValueError(f"Truncated ELF program header table in {elf_path}")
+        file_size = fh.seek(0, 2)
 
     rom_used = 0
     for idx in range(e_phnum):
-        p_type, _, _, p_paddr, p_filesz, p_memsz, _, _ = struct.unpack_from(
+        p_type, p_offset, _, p_paddr, p_filesz, p_memsz, _, _ = struct.unpack_from(
             "<IIIIIIII", table, idx * e_phentsize
         )
         if p_type != PT_LOAD or p_filesz == 0:
             continue
         if p_filesz > p_memsz:
             raise ValueError(f"Corrupt PT_LOAD segment (p_filesz > p_memsz) in {elf_path}")
+        if p_offset + p_filesz > file_size:
+            raise ValueError(f"Truncated PT_LOAD segment in {elf_path}")
         if rom_origin <= p_paddr < rom_origin + rom_length:
             end = (p_paddr + p_filesz) - rom_origin
             if end > rom_used:

@@ -74,6 +74,10 @@ if [ ! -s "$ELF_ROM" ]; then
   exit 1
 fi
 if ! cmp -s -- "$ELF_ROM" "$TMP_ROM"; then
+  if ! cmp -s -n "$(wc -c < "$ELF_ROM")" -- "$ELF_ROM" "$TMP_ROM"; then
+    echo "FAIL: ROM does not match ELF: $ROM and $ELF"
+    exit 1
+  fi
   if [ ! -x "$GBAFIX" ]; then
     echo "FAIL: cannot verify ROM padding: gbafix is not executable at $GBAFIX"
     exit 1

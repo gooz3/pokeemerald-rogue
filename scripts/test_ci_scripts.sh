@@ -39,15 +39,29 @@ import pathlib, struct, sys
 # 2. .ram_loaded_from_rom: EWRAM VMA, ROM LMA 0x09e00000, file-backed 0x10000 -> counts in ROM
 # 3. .ram_noload_with_rom_lma: EWRAM VMA, ROM LMA 0x09f00000, filesz 0, memsz 0x8000 -> ignored for ROM
 phdrs = [
-    (1, 0, 0x08000000, 0x08000000, 0x01000000, 0x01000000, 5, 4),
-    (1, 0, 0x02020000, 0x09E00000, 0x00010000, 0x00010000, 6, 4),
+    (1, 0x100, 0x08000000, 0x08000000, 0x01000000, 0x01000000, 5, 4),
+    (1, 0x01000100, 0x02020000, 0x09E00000, 0x00010000, 0x00010000, 6, 4),
     (1, 0, 0x02030000, 0x09F00000, 0x00000000, 0x00008000, 6, 4),
 ]
 e_ident = b"\x7fELF\x01\x01\x01" + b"\x00" * 9
 ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52, 0, 0, 52, 32, len(phdrs), 0, 0, 0)
 body = b"".join(struct.pack("<IIIIIIII", *p) for p in phdrs)
-pathlib.Path(sys.argv[1]).write_bytes(ehdr + body)
+file_size = max(p[1] + p[4] for p in phdrs if p[4])
+with pathlib.Path(sys.argv[1]).open("wb") as fixture:
+    fixture.write(ehdr + body)
+    fixture.truncate(file_size)
+with pathlib.Path(sys.argv[1]).with_name("truncated.elf").open("wb") as fixture:
+    fixture.write(ehdr + body)
+    fixture.truncate(file_size - 1)
 PY
+
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/truncated.elf" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'Truncated PT_LOAD segment' <<<"$OUT"; then
+  echo "FAIL: expected truncated ELF payload to be rejected"
+  echo "$OUT"
+  exit 1
+fi
 
 # Expected high-water marks:
 # - EWRAM: 0x00038000 / 0x00040000 = 87.50% (includes NOLOAD section)
@@ -104,6 +118,10 @@ EOF
 
 cat > "$STUB_BIN/mgba" <<'EOF'
 #!/usr/bin/env bash
+if [[ $# -ne 4 || -z ${XDG_CONFIG_HOME:-} || $1 != -C || $2 != "savegamePath=$XDG_CONFIG_HOME" || $3 != -d || $4 != "$XDG_CONFIG_HOME/"* || ! -f $4 ]]; then
+  printf 'Expected an isolated config, save directory, and ROM copy\n' >&2
+  exit 1
+fi
 commands=$(cat)
 if [[ "$commands" != $'break 0x0820bdb0\ncontinue\nquit' ]]; then
   printf 'Unexpected debugger commands:\n%s\n' "$commands" >&2
@@ -121,9 +139,9 @@ chmod +x "$STUB_BIN/arm-none-eabi-nm" "$STUB_BIN/arm-none-eabi-objcopy" "$STUB_B
 printf 'FAKE_ROM_BYTES' > "$TMPDIR/test.gba"
 printf 'DIFFERENT_ELF_BYTES' > "$TMPDIR/test.elf"
 status=0
-OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$TMPDIR/should-not-be-called" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: ROM does not match ELF:' <<<"$OUT"; then
-  echo "FAIL: smoke_test.sh should reject a mismatched ROM and ELF"
+  echo "FAIL: smoke_test.sh should reject a mismatched ROM and ELF before running gbafix"
   echo "$OUT"
   exit 1
 fi
