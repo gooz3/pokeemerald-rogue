@@ -97,7 +97,7 @@ def parse_map(map_path: pathlib.Path, elf_path: pathlib.Path) -> dict[str, tuple
     # Match top-level output sections (column 0), handling both single-line and
     # wrapped-line formats, using RAM VMAs for EWRAM/IWRAM accounting.
     section_re = re.compile(
-        r"^([.\w-]+)(?:[ \t]+|\n[ \t]+)(0x[0-9a-fA-F]+)[ \t]+(0x[0-9a-fA-F]+)",
+        r"^(\S+)(?:[ \t]+|\n[ \t]+)(0x[0-9a-fA-F]+)[ \t]+(0x[0-9a-fA-F]+)",
         re.MULTILINE,
     )
     for m in section_re.finditer(body):

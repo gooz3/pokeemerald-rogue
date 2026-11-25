@@ -87,17 +87,18 @@ jobs:
             wget \
             mgba-sdl
 
-      - name: Cache Poryscript & UPS tools
+      - name: Cache Linux Poryscript
         uses: actions/cache@v4
         with:
-          path: |
-            tools/poryscript
-            tools/ups
-          key: deps-${{ runner.os }}-${{ hashFiles('init_deps.sh') }}
+          path: tools/poryscript/poryscript-linux
+          key: poryscript-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('init_deps.sh') }}
 
       - name: Fetch build dependencies
         run: |
-          ./init_deps.sh
+          if [ ! -x tools/poryscript/poryscript-linux/poryscript ]; then
+            rm -rf tools/poryscript
+            ./init_deps.sh
+          fi
           test -x tools/poryscript/poryscript-linux/poryscript
 
       - name: Build ${{ matrix.name }} ROM

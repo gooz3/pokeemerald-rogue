@@ -49,22 +49,25 @@ for tool in arm-none-eabi-nm arm-none-eabi-objcopy; do
   fi
 done
 
-ADDR=$(arm-none-eabi-nm -- "$ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol { print "0x" $1; found = 1 }')
+# Snapshot both build artifacts into an isolated temp dir before symbol lookup and verification.
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+TMP_ROM="$TMPDIR/$(basename -- "$ROM")"
+TMP_ELF=$(mktemp "$TMPDIR/source-elf.XXXXXXXX")
+cp -- "$ROM" "$TMP_ROM"
+cp -- "$ELF" "$TMP_ELF"
+
+ADDR=$(arm-none-eabi-nm -- "$TMP_ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol { print "0x" $1; found = 1 }')
 if [ -z "$ADDR" ]; then
   echo "FAIL: $MILESTONE not found in $ELF"
   exit 1
 fi
 ADDR_HEX=$(printf '%x' "$ADDR")
 
-# Boot a temp copy with isolated XDG config and savegamePath so user config/saves cannot affect the test.
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
-TMP_ROM="$TMPDIR/$(basename -- "$ROM")"
-cp -- "$ROM" "$TMP_ROM"
-
-# Verify the ROM matches the ELF's binary image (either raw or padded via gbafix -p).
+# Verify the ROM matches the ELF's binary image (either raw objcopy output or
+# after reproducing the Makefile's `gbafix -p --silent` header-fix + padding step).
 ELF_ROM=$(mktemp "$TMPDIR/elf-rom.XXXXXXXX")
-if ! arm-none-eabi-objcopy -O binary -- "$ELF" "$ELF_ROM"; then
+if ! arm-none-eabi-objcopy -O binary -- "$TMP_ELF" "$ELF_ROM"; then
   echo "FAIL: could not extract ROM image from $ELF"
   exit 1
 fi
@@ -74,10 +77,6 @@ if [ ! -s "$ELF_ROM" ]; then
   exit 1
 fi
 if ! cmp -s -- "$ELF_ROM" "$TMP_ROM"; then
-  if ! cmp -s -n "$(wc -c < "$ELF_ROM")" -- "$ELF_ROM" "$TMP_ROM"; then
-    echo "FAIL: ROM does not match ELF: $ROM and $ELF"
-    exit 1
-  fi
   if [ ! -x "$GBAFIX" ]; then
     echo "FAIL: cannot verify ROM padding: gbafix is not executable at $GBAFIX"
     exit 1

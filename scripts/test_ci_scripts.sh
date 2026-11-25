@@ -22,7 +22,7 @@ Linker script and memory map
 
 ewram           0x02000000    0x00020000
 iwram           0x03000000    0x00002000
-.very_long_wrapped_section_name
+.iwram$very_long_wrapped_section
                 0x03002000    0x00002000
 .text           0x08000000    0x01000000
 .ram_loaded_from_rom
@@ -83,7 +83,7 @@ OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/overla
   --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 10)
 grep -q "| \`ROM\` |.*\\*\\*3\\.12%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: pre-ROM overlap segment mismatch"; echo "$OUT"; exit 1; }
 
-sed 's/0x02000000/0x00000000/' "$MAP" > "$TMPDIR/zero-rom.map"
+sed '/^ROM[[:blank:]]/s/0x02000000/0x00000000/' "$MAP" > "$TMPDIR/zero-rom.map"
 status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/zero-rom.map" --elf "$TMPDIR/overlap.elf" 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q 'Expected positive length for ROM' <<<"$OUT"; then
@@ -154,7 +154,9 @@ if [ "$#" -ne 3 ] || [ "$2" != "-p" ] || [ "$3" != "--silent" ]; then
   printf 'Unexpected gbafix args: %s\n' "$*" >&2
   exit 1
 fi
-printf 'PADDING' >> "$1"
+data=$(cat -- "$1")
+data=${data/#RAW_/FIX_}
+printf '%sPADDING' "$data" > "$1"
 EOF
 
 cat > "$STUB_BIN/mgba" <<'EOF'
@@ -180,9 +182,9 @@ chmod +x "$STUB_BIN/arm-none-eabi-nm" "$STUB_BIN/arm-none-eabi-objcopy" "$STUB_B
 printf 'FAKE_ROM_BYTES' > "$TMPDIR/test.gba"
 printf 'DIFFERENT_ELF_BYTES' > "$TMPDIR/test.elf"
 status=0
-OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$TMPDIR/should-not-be-called" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: ROM does not match ELF:' <<<"$OUT"; then
-  echo "FAIL: smoke_test.sh should reject a mismatched ROM and ELF before running gbafix"
+  echo "FAIL: smoke_test.sh should reject a mismatched ROM and ELF"
   echo "$OUT"
   exit 1
 fi
@@ -233,11 +235,35 @@ if ! PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0"
   exit 1
 fi
 
+printf 'FIX_ROM_BYTESPADDING' > "$TMPDIR/unpatched.gba"
+printf 'RAW_ROM_BYTES' > "$TMPDIR/unpatched.elf"
+if ! PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/unpatched.gba" 10 >/dev/null 2>&1; then
+  echo "FAIL: smoke_test.sh should accept ROM whose header and padding were normalized by gbafix -p"
+  exit 1
+fi
+
 printf 'FAKE_ROM_BYTESJUNKPAD' > "$TMPDIR/padded.gba"
 status=0
 OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/padded.gba" 10 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: ROM does not match ELF:' <<<"$OUT"; then
   echo "FAIL: smoke_test.sh should reject incorrect ROM padding"
+  echo "$OUT"
+  exit 1
+fi
+
+# Exercise repository-relative paths and argument quoting through the Nix wrapper.
+cat > "$STUB_BIN/nix-shell" <<'EOF'
+#!/usr/bin/env bash
+[[ $# -eq 2 && $1 == --run ]] || exit 1
+exec bash -c "$2"
+EOF
+chmod +x "$STUB_BIN/nix-shell"
+cp -- "$TMPDIR/test.gba" "$TMPDIR/wrapper test.gba"
+cp -- "$TMPDIR/test.elf" "$TMPDIR/wrapper test.elf"
+WRAPPER_ROM=$(realpath --relative-to="$REPO_ROOT" -- "$TMPDIR/wrapper test.gba")
+if ! OUT=$(cd -- "$TMPDIR" && PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" \
+  "$REPO_ROOT/scripts/smoke_test_nix.sh" "$WRAPPER_ROM" 10 2>&1); then
+  echo "FAIL: smoke_test_nix.sh should accept a repository-relative ROM path containing spaces"
   echo "$OUT"
   exit 1
 fi
