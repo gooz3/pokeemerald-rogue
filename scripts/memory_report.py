@@ -29,15 +29,17 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
         _, _, _, _, e_phoff, _, _, _, e_phentsize, e_phnum, _, _, _ = struct.unpack_from(
             "<HHIIIIIHHHHHH", ehdr, 16
         )
-        if e_phnum == 0 or e_phnum == 0xFFFF or e_phentsize < ELF32_PHDR_MIN_SIZE:
+        if not 0 < e_phnum < 0xFFFF or e_phentsize != ELF32_PHDR_MIN_SIZE or e_phoff < ELF32_EHDR_SIZE:
             raise ValueError(f"Invalid ELF program header table in {elf_path}")
 
         table_size = e_phnum * e_phentsize
+        file_size = fh.seek(0, 2)
+        if e_phoff + table_size > file_size:
+            raise ValueError(f"Truncated ELF program header table in {elf_path}")
         fh.seek(e_phoff)
         table = fh.read(table_size)
         if len(table) < table_size:
             raise ValueError(f"Truncated ELF program header table in {elf_path}")
-        file_size = fh.seek(0, 2)
 
     rom_used = 0
     for idx in range(e_phnum):
@@ -50,8 +52,9 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
             raise ValueError(f"Corrupt PT_LOAD segment (p_filesz > p_memsz) in {elf_path}")
         if p_offset + p_filesz > file_size:
             raise ValueError(f"Truncated PT_LOAD segment in {elf_path}")
-        if rom_origin <= p_paddr < rom_origin + rom_length:
-            end = (p_paddr + p_filesz) - rom_origin
+        segment_end = p_paddr + p_filesz
+        if p_paddr < rom_origin + rom_length and segment_end > rom_origin:
+            end = segment_end - rom_origin
             if end > rom_used:
                 rom_used = end
 

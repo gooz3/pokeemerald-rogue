@@ -61,7 +61,7 @@ jobs:
             exit 0
           fi
           CHANGED=$(git diff --no-renames --name-only HEAD^1 HEAD)
-          if grep -Eq '^(include/((config|rogue|rogue_save|global|global\.(berry|fieldmap|tv)|save|pokemon_storage_system|pokemon|hall_of_fame|ereader_helpers|trainer_hill|recorded_battle)|config/(battle|debug|item|pokemon|overworld)|constants/(global|flags|vars|rogue|rogue_hub|rogue_pokedex|rogue_quests|game_stat|tv|species|pokedex|berry|items|maps|map_groups|layouts|moves|pokemon|easy_chat|trainer_hill|generated/(decorations|quests|quest_consts|custom_mons)))\.h|src/(rogue_save|save|hall_of_fame|ereader_helpers|recorded_battle)\.c|data/maps/map_groups\.json|data/layouts/layouts\.json|src/data/rogue/((decorations|quests)(\.json|/[^/]+\.json)|custom_mons\.json)|tools/(Pokabbie/Build/CustomJson|mapjson)/.+)$' <<<"$CHANGED"; then
+          if grep -Eq '^(include/(config|rogue|rogue_save|global|global\.(berry|fieldmap|tv)|save|pokemon_storage_system|pokemon|hall_of_fame|ereader_helpers|trainer_hill|recorded_battle)\.h|include/(config|constants)/.+\.h|src/(rogue_save|save|hall_of_fame|ereader_helpers|recorded_battle)\.c|data/maps/map_groups\.json|data/layouts/layouts\.json|src/data/region_map/region_map_sections\.json(\.txt)?|src/data/rogue/((decorations|quests)(\.json|/[^/]+\.json)|custom_mons\.json)|tools/(Pokabbie/Build/CustomJson|mapjson|jsonproc)/.+)$' <<<"$CHANGED"; then
             {
               echo "### Save Compatibility Check"
               echo ""

@@ -53,7 +53,23 @@ with pathlib.Path(sys.argv[1]).open("wb") as fixture:
 with pathlib.Path(sys.argv[1]).with_name("truncated.elf").open("wb") as fixture:
     fixture.write(ehdr + body)
     fixture.truncate(file_size - 1)
+pathlib.Path(sys.argv[1]).with_name("truncated-table.elf").write_bytes(ehdr + body[:-1])
+
+# Single PT_LOAD segment starting before rom_origin (FILEHDR/PHDRS style) and extending into ROM to 0x08100000 (3.12%).
+overlap_phdr = struct.pack("<IIIIIIII", 1, 0, 0x07FFFF80, 0x07FFFF80, 0x00100080, 0x00100080, 5, 4)
+overlap_ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52, 0, 0, 52, 32, 1, 0, 0, 0)
+with pathlib.Path(sys.argv[1]).with_name("overlap.elf").open("wb") as fixture:
+    fixture.write(overlap_ehdr + overlap_phdr)
+    fixture.truncate(0x00100080)
 PY
+
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/truncated-table.elf" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'Truncated ELF program header table' <<<"$OUT"; then
+  echo "FAIL: expected truncated ELF program header table to be rejected"
+  echo "$OUT"
+  exit 1
+fi
 
 status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/truncated.elf" 2>&1) || status=$?
@@ -62,6 +78,10 @@ if [ "$status" -ne 1 ] || ! grep -q 'Truncated PT_LOAD segment' <<<"$OUT"; then
   echo "$OUT"
   exit 1
 fi
+
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/overlap.elf" \
+  --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 10)
+grep -q "| \`ROM\` |.*\\*\\*3\\.12%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: pre-ROM overlap segment mismatch"; echo "$OUT"; exit 1; }
 
 # Expected high-water marks:
 # - EWRAM: 0x00038000 / 0x00040000 = 87.50% (includes NOLOAD section)
@@ -81,6 +101,18 @@ if [ "$status" -ne 1 ] || ! grep -q "| \`ROM\` |.*| FAIL |" <<<"$OUT"; then
   echo "$OUT"
   exit 1
 fi
+
+for gate in EWRAM:87 IWRAM:51; do
+  region=${gate%:*}
+  limit=${gate#*:}
+  status=0
+  OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" "--max-${region,,}-pct" "$limit" 2>&1) || status=$?
+  if [ "$status" -ne 1 ] || ! grep -q "| \`$region\` |.*| FAIL |" <<<"$OUT"; then
+    echo "FAIL: expected a $region headroom failure at a $limit% gate"
+    echo "$OUT"
+    exit 1
+  fi
+done
 
 : > "$TMPDIR/empty.map"
 cp "$ELF" "$TMPDIR/empty.elf"
@@ -189,6 +221,15 @@ fi
 
 if ! PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/padded.gba" 10 >/dev/null 2>&1; then
   echo "FAIL: smoke_test.sh should accept padded ROM via gbafix -p fallback"
+  exit 1
+fi
+
+printf 'FAKE_ROM_BYTESJUNKPAD' > "$TMPDIR/padded.gba"
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/padded.gba" 10 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: ROM does not match ELF:' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should reject incorrect ROM padding"
+  echo "$OUT"
   exit 1
 fi
 
