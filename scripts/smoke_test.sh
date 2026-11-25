@@ -57,11 +57,13 @@ TMP_ELF=$(mktemp "$TMPDIR/source-elf.XXXXXXXX")
 cp -- "$ROM" "$TMP_ROM"
 cp -- "$ELF" "$TMP_ELF"
 
-ADDR=$(arm-none-eabi-nm -- "$TMP_ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol { print "0x" $1; found = 1 }')
-if [ -z "$ADDR" ]; then
+ADDR_RAW=$(arm-none-eabi-nm -- "$TMP_ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol && $1 ~ /^[0-9a-fA-F]+$/ { print "0x" $1; found = 1 }')
+if [ -z "$ADDR_RAW" ]; then
   echo "FAIL: $MILESTONE not found in $ELF"
   exit 1
 fi
+# Strip the Thumb interworking bit; mGBA matches breakpoints against the (even) PC.
+ADDR=$(printf '0x%08x' "$(( ADDR_RAW & ~1 ))")
 ADDR_HEX=$(printf '%x' "$ADDR")
 
 # Verify the ROM matches the ELF's binary image (either raw objcopy output or

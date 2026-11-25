@@ -139,7 +139,7 @@ mkdir -p "$STUB_BIN"
 
 cat > "$STUB_BIN/arm-none-eabi-nm" <<'EOF'
 #!/usr/bin/env bash
-echo "0820bdb0 t Task_TitleScreenPhase3"
+echo "0820bdb1 t Task_TitleScreenPhase3"
 EOF
 
 cat > "$STUB_BIN/arm-none-eabi-objcopy" <<'EOF'
