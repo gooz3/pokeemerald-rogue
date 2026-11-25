@@ -3,86 +3,129 @@ name: CI
 on:
   push:
     branches:
-      - vanilla
-      - vanilla-dev
-      - expansion
-      - expansion-dev
+      - gooz3-release
   pull_request:
     branches:
-      - vanilla
-      - vanilla-dev
-      - expansion
-      - expansion-dev
+      - gooz3-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  checks:
+    name: Script checks
     runs-on: ubuntu-latest
-    container: devkitpro/devkitarm
-    env:
-      GAME_VERSION: EMERALD
-      GAME_REVISION: 0
-      GAME_LANGUAGE: ENGLISH
-      MODERN: 0
-      COMPARE: 0
-      UNUSED_ERROR: 0
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Checkout agbcc
+      - name: Clear persisted git credentials
+        # actions/checkout's persist-credentials:false runs `git submodule foreach`,
+        # which fails on the inherited orphaned `agbcc` gitlink (no .gitmodules).
+        run: |
+          git config --local --unset-all 'http.https://github.com/.extraheader' || {
+            status=$?
+            if [ "$status" -ne 5 ]; then
+              exit "$status"
+            fi
+          }
+
+      - name: Lint shell scripts
+        run: |
+          shellcheck scripts/build_nix.sh scripts/smoke_test.sh scripts/smoke_test_nix.sh scripts/test_ci_scripts.sh
+
+      - name: Check Python & CI helper scripts
+        run: |
+          python3 -m py_compile scripts/memory_report.py
+          scripts/test_ci_scripts.sh
+
+  build:
+    name: Build & Smoke (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Release
+            release: 1
+          - name: Debug
+            release: 0
+    steps:
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Clear persisted git credentials
+        # actions/checkout's persist-credentials:false runs `git submodule foreach`,
+        # which fails on the inherited orphaned `agbcc` gitlink (no .gitmodules).
+        run: |
+          git config --local --unset-all 'http.https://github.com/.extraheader' || {
+            status=$?
+            if [ "$status" -ne 5 ]; then
+              exit "$status"
+            fi
+          }
+
+      - name: Install toolchain and emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            build-essential \
+            libpng-dev \
+            libelf-dev \
+            zlib1g-dev \
+            unzip \
+            wget \
+            mgba-sdl
+
+      - name: Cache Linux Poryscript archive
+        uses: actions/cache@v4
         with:
-          path: agbcc
-          repository: pret/agbcc
+          path: ${{ runner.temp }}/poryscript-linux.zip
+          key: poryscript-archive-${{ runner.os }}-${{ runner.arch }}-3.0.2-1080c2c48a01
 
-      - name: Install binutils
+      - name: Fetch and verify Linux Poryscript
         run: |
-          sudo apt update
-          sudo apt install -y build-essential libpng-dev libelf-dev
-        # build-essential, git, and libpng-dev are already installed
-        # gcc-arm-none-eabi is only needed for the modern build
-        # as an alternative to dkP
+          set -euo pipefail
+          archive="$RUNNER_TEMP/poryscript-linux.zip"
+          checksum='1080c2c48a0122f72e3325e0419ea5689ccd40bf4be3ffa2bb1cdee99abf53e6'
+          tmp_dir=$(mktemp -d)
+          trap 'rm -rf "$tmp_dir"' EXIT
+          if [ ! -f "$archive" ] || ! printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -; then
+            wget -nv -O "$tmp_dir/poryscript-linux.zip" \
+              https://github.com/huderlem/poryscript/releases/download/3.0.2/poryscript-linux.zip
+            printf '%s  %s\n' "$checksum" "$tmp_dir/poryscript-linux.zip" | sha256sum -c -
+            mv "$tmp_dir/poryscript-linux.zip" "$archive"
+          fi
+          unzip -q "$archive" -d "$tmp_dir/out"
+          rm -rf tools/poryscript/poryscript-linux
+          mkdir -p tools/poryscript
+          mv "$tmp_dir/out/poryscript-linux" tools/poryscript/poryscript-linux
+          test -x tools/poryscript/poryscript-linux/poryscript
 
-      - name: Install Dependencies
+      - name: Build ${{ matrix.name }} ROM
+        id: build_rom
         run: |
-          ./init_deps.sh
+          make -j"$(nproc)" -O MODERN=1 COMPARE=0 RELEASE=${{ matrix.release }} UNUSED_ERROR=0 all
 
-      - name: Install agbcc
+      - name: Headless mGBA title-screen smoke test
+        run: scripts/smoke_test.sh emerogue.gba 60
+
+      - name: Memory usage report & headroom gate
+        if: ${{ !cancelled() && steps.build_rom.outcome == 'success' }}
         run: |
-          ./build.sh
-          ./install.sh ../
-        working-directory: agbcc
-
-      #- name: Agbcc
-      #  env:
-      #    MODERN: 0
-      #    COMPARE: 0
-      #  run: make -j${nproc} -O all
-
-      - name: Build Debug
-        env:
-          MODERN: 1
-          COMPARE: 0
-          RELEASE: 0
-        run: make -j${nproc} -O all
-
-      - name: Build Release
-        env:
-          MODERN: 1
-          COMPARE: 0
-          RELEASE: 1
-        run: make -j${nproc} -O all
-
-      - name: Update Memory Stats
-        uses: actions/upload-artifact@v4
-        with:
-          name: Memory Stats
-          path: pokeemerald_memorystats.csv
-
-      - name: Test
-        env:
-          MODERN: 1
-          TEST: 1
-        run: |
-          make -j${nproc} -O pokeemerald-test.elf
-          make -j${nproc} check
+          python3 scripts/memory_report.py emerogue.map \
+            --label "${{ matrix.name }}" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --max-ewram-pct 99.5 \
+            --max-iwram-pct 85.0 \
+            --max-rom-pct 99.5

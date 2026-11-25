@@ -1,27 +1,19 @@
 #!/usr/bin/env bash
-# Boot the ROM headless in mGBA and check it reaches the title screen.
+# Boot the ROM headless in mGBA (via shell.nix) and check it reaches the interactive title screen.
 # Usage: scripts/smoke_test_nix.sh [rom] [timeout_seconds]
+# Unlike smoke_test.sh, this wrapper resolves relative ROM paths from the repository root.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
-ROM=${1:-emerogue.gba}
-TIMEOUT=${2:-60}
-MAP=${ROM%.gba}.map
-
-ADDR=$(awk '$2 == "CB2_InitTitleScreen" { print $1; exit }' "$MAP")
-if [ -z "$ADDR" ]; then
-  echo "FAIL: CB2_InitTitleScreen not found in $MAP"
-  exit 1
-fi
-
-# mGBA's CLI debugger: break on the title screen, run, and quit once it's hit.
-OUT=$( (printf 'break %s\ncontinue\nquit\n' "$ADDR") |
-  nix-shell --run "SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout $TIMEOUT mgba -d $ROM" 2>&1 || true)
-
-if grep -q "Hit breakpoint" <<<"$OUT"; then
-  echo "PASS: $ROM reached the title screen"
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "${1:-}" ]; then
+  case "$1" in
+    /*) ROM=$1 ;;
+    *) ROM="$REPO_ROOT/$1" ;;
+  esac
 else
-  echo "FAIL: $ROM did not reach the title screen within ${TIMEOUT}s"
-  tail -20 <<<"$OUT"
-  exit 1
+  ROM="$REPO_ROOT/emerogue.gba"
 fi
+TIMEOUT=${2:-60}
+
+cd -- "$REPO_ROOT"
+nix-shell --run "$(printf 'scripts/smoke_test.sh %q %q' "$ROM" "$TIMEOUT")"
