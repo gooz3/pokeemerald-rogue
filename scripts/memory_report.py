@@ -11,8 +11,9 @@ import sys
 
 EXPECTED_REGIONS = ("EWRAM", "IWRAM", "ROM")
 RAM_REGIONS = ("EWRAM", "IWRAM")
-# src/crt0.s sets sp_sys to IWRAM_END - 0x1c0 (IRQ stack + BIOS slots live above it).
-IWRAM_RESERVED_TOP_BYTES = 0x1C0
+# The system stack grows down from IWRAM_END - 0x1c0 (src/crt0.s), and the m4a sound
+# mixer uses it for sample buffers down to 0x03007900 (src/m4a_1.s stack_boundary_literal).
+IWRAM_RESERVED_TOP_BYTES = 0x700
 PT_LOAD = 1
 ELF32_EHDR_SIZE = 52
 ELF32_PHDR_MIN_SIZE = 32
@@ -153,15 +154,7 @@ def main() -> int:
         if not 0.0 < limit < 100.0:
             parser.error(f"--max-{region}-pct must be strictly between 0 and 100")
 
-    if not args.map_file.is_file():
-        print(f"FAIL: Linker map not found: {args.map_file}", file=sys.stderr)
-        return 1
-
     elf_path = args.elf if args.elf is not None else args.map_file.with_suffix(".elf")
-    if not elf_path.is_file():
-        print(f"FAIL: Matching ELF not found: {elf_path}", file=sys.stderr)
-        return 1
-
     limits = {
         "EWRAM": args.max_ewram_pct,
         "IWRAM": args.max_iwram_pct,
@@ -169,6 +162,12 @@ def main() -> int:
     }
 
     try:
+        if not args.map_file.is_file():
+            print(f"FAIL: Linker map not found: {args.map_file}", file=sys.stderr)
+            return 1
+        if not elf_path.is_file():
+            print(f"FAIL: Matching ELF not found: {elf_path}", file=sys.stderr)
+            return 1
         stats = parse_map(args.map_file, elf_path)
     except (OSError, ValueError) as exc:
         print(f"FAIL: Could not read memory usage from {args.map_file}: {exc}", file=sys.stderr)
@@ -192,7 +191,7 @@ def main() -> int:
             failed = True
         status = "FAIL" if over else "PASS"
         pct_display, gate_display = f"{pct:.2f}", f"{gate:g}"
-        if over and float(pct_display) <= float(gate_display):
+        if (float(pct_display) > float(gate_display)) != over:
             pct_display, gate_display = str(pct), str(gate)
         lines.append(
             f"| `{region}` | {fmt_bytes(used)} | {fmt_bytes(capacity)} | "

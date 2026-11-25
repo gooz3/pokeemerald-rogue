@@ -132,7 +132,7 @@ fi
 
 # Expected high-water marks:
 # - EWRAM: 0x00038000 / 0x00040000 = 87.50% (includes NOLOAD section)
-# - IWRAM: (0x00004000 + 0x1c0) / 0x00008000 = 51.37% (includes wrapped section)
+# - IWRAM: (0x00004000 + 0x700) / 0x00008000 = 55.47% (includes wrapped section)
 # - ROM:   (0x09e00000 + 0x00010000 - 0x08000000) / 0x02000000 = 93.95% (excludes NOLOAD ROM LMA 0x09f00000)
 SUMMARY="$TMPDIR/summary.md"
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --label "Fixture" \
@@ -140,7 +140,7 @@ OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --label "Fixture" \
 
 printf '%s\n\n' "$OUT" | cmp -s - "$SUMMARY" || { echo "FAIL: summary does not match the memory report"; exit 1; }
 grep -q "| \`EWRAM\` |.*\\*\\*87\\.50%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: EWRAM mismatch"; echo "$OUT"; exit 1; }
-grep -q "| \`IWRAM\` |.*\\*\\*51\\.37%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: IWRAM mismatch"; echo "$OUT"; exit 1; }
+grep -q "| \`IWRAM\` |.*\\*\\*55\\.47%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: IWRAM mismatch"; echo "$OUT"; exit 1; }
 grep -q "| \`ROM\` |.*\\*\\*93\\.95%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: ROM load-address mismatch"; echo "$OUT"; exit 1; }
 
 status=0
@@ -160,7 +160,14 @@ if [ "$status" -ne 1 ] || ! grep -q "| \`ROM\` |.*\\*\\*3\\.125%\\*\\*.*| <= 3\\
   exit 1
 fi
 
-for gate in EWRAM:87 IWRAM:51; do
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --max-rom-pct 93.946)
+if ! grep -q "| \`ROM\` |.*\\*\\*93\\.9453125%\\*\\*.*| <= 93\\.946% | PASS |" <<<"$OUT"; then
+  echo "FAIL: expected unrounded ROM percentage when rounding would fake a failure"
+  echo "$OUT"
+  exit 1
+fi
+
+for gate in EWRAM:87 IWRAM:55; do
   region=${gate%:*}
   limit=${gate#*:}
   status=0
@@ -203,6 +210,10 @@ EOF
 cat > "$STUB_BIN/arm-none-eabi-objcopy" <<'EOF'
 #!/usr/bin/env bash
 # Usage: arm-none-eabi-objcopy -O binary -- <elf> <out>
+if [[ $# -ne 5 || $1 != -O || $2 != binary || $3 != -- ]]; then
+  printf 'Unexpected objcopy args: %s\n' "$*" >&2
+  exit 1
+fi
 cp -- "$4" "$5"
 EOF
 
