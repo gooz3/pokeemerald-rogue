@@ -9,6 +9,8 @@ import re
 import sys
 
 EXPECTED_REGIONS = ("EWRAM", "IWRAM", "ROM")
+# src/crt0.s sets sp_sys to IWRAM_END - 0x1c0 (IRQ stack + BIOS slots live above it).
+IWRAM_RESERVED_TOP_BYTES = 0x1C0
 
 
 def parse_map(map_path: pathlib.Path) -> dict[str, tuple[int, int]]:
@@ -63,6 +65,8 @@ def parse_map(map_path: pathlib.Path) -> dict[str, tuple[int, int]]:
     empty = [r for r in EXPECTED_REGIONS if used[r] == 0]
     if empty:
         raise ValueError(f"No non-empty output sections found for {', '.join(empty)} in {map_path}")
+
+    used["IWRAM"] += IWRAM_RESERVED_TOP_BYTES
 
     return {r: (used[r], regions[r][1]) for r in EXPECTED_REGIONS}
 
@@ -121,7 +125,7 @@ def main() -> int:
         status = "FAIL" if over else "PASS"
         lines.append(
             f"| `{region}` | {fmt_bytes(used)} | {fmt_bytes(capacity)} | "
-            f"{fmt_bytes(free)} | **{pct:.2f}%** | <= {gate:.1f}% | {status} |"
+            f"{fmt_bytes(free)} | **{pct:.2f}%** | <= {gate:g}% | {status} |"
         )
 
     report = "\n".join(lines) + "\n"

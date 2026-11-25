@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Lint shell scripts
         run: |
@@ -37,7 +39,7 @@ jobs:
           python3 -m py_compile scripts/memory_report.py
 
       - name: Check save-layout files on PR
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,12 +54,12 @@ jobs:
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-          if grep -Eq '^(include/(rogue|global|save|pokemon_storage_system|pokemon)\.h|src/(rogue_save|save)\.c)$' <<<"$CHANGED"; then
+          if grep -Eq '^(include/((rogue|rogue_save|global|global\.berry|save|pokemon_storage_system|pokemon)|constants/(global|flags|vars|rogue|rogue_hub))\.h|src/(rogue_save|save)\.c)$' <<<"$CHANGED"; then
             {
               echo "### Save Compatibility Check"
               echo ""
               echo "> [!WARNING]"
-              echo "> This PR modifies save-related code (\`include/rogue.h\`, \`include/global.h\`, \`include/save.h\`, \`include/pokemon_storage_system.h\`, \`include/pokemon.h\`, \`src/rogue_save.c\`, or \`src/save.c\`). Verify field order, struct sizes, and serialized save compatibility — or bump \`ROGUE_SAVE_VERSION\` and update migration/assert logic."
+              echo "> This PR modifies save-related code. Verify field order, struct sizes, and serialized save compatibility — or bump \`ROGUE_SAVE_VERSION\` and update migration/assert logic."
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -77,6 +79,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install toolchain and emulator
         run: |

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Boot the ROM headless in mGBA (with blank flash) and check it reaches the interactive title screen.
+# Boot the ROM headless in mGBA (with blank flash & isolated config) and check it reaches the interactive title screen.
 # Usage: scripts/smoke_test.sh [rom] [timeout_seconds]
 set -euo pipefail
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 ROM=${1:-"$REPO_ROOT/emerogue.gba"}
 case "$ROM" in
   /*) ;;
@@ -16,7 +16,7 @@ if ! [[ "$TIMEOUT" =~ ^0*[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-ELF=${ROM%.gba}.elf
+ELF=${ROM%.[gG][bB][aA]}.elf
 MILESTONE=Task_TitleScreenPhase3
 
 if [ ! -f "$ROM" ]; then
@@ -42,31 +42,49 @@ if [ -z "$MGBA" ]; then
   exit 1
 fi
 
-if ! command -v arm-none-eabi-nm >/dev/null 2>&1; then
-  echo "FAIL: arm-none-eabi-nm not found in PATH"
-  exit 1
-fi
+for tool in arm-none-eabi-nm arm-none-eabi-objcopy; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "FAIL: $tool not found in PATH"
+    exit 1
+  fi
+done
 
 ADDR=$(arm-none-eabi-nm -- "$ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol { print "0x" $1; found = 1 }')
 if [ -z "$ADDR" ]; then
   echo "FAIL: $MILESTONE not found in $ELF"
   exit 1
 fi
+ADDR_HEX=$(printf '%x' "$ADDR")
 
-# Boot a temp copy with savegamePath pointed at TMPDIR so local saves cannot affect the test.
+# Boot a temp copy with isolated XDG config and savegamePath so user config/saves cannot affect the test.
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 TMP_ROM="$TMPDIR/$(basename -- "$ROM")"
 cp -- "$ROM" "$TMP_ROM"
 
+# Verify the ROM matches the ELF's binary image (ignoring any trailing gbafix padding).
+ELF_ROM=$(mktemp "$TMPDIR/elf-rom.XXXXXXXX")
+if ! arm-none-eabi-objcopy -O binary -- "$ELF" "$ELF_ROM"; then
+  echo "FAIL: could not extract ROM image from $ELF"
+  exit 1
+fi
+ELF_ROM_SIZE=$(stat -c %s -- "$ELF_ROM")
+if [ "$ELF_ROM_SIZE" -eq 0 ] || ! cmp -s -n "$ELF_ROM_SIZE" -- "$ELF_ROM" "$TMP_ROM"; then
+  echo "FAIL: ROM does not match ELF: $ROM and $ELF"
+  exit 1
+fi
+
 # mGBA's CLI debugger: break once the title screen is ready for input, run, and quit once hit.
 if OUT=$(printf 'break %s\ncontinue\nquit\n' "$ADDR" |
-  SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout --kill-after=5s -- "$TIMEOUT" "$MGBA" -C "savegamePath=$TMPDIR" -d "$TMP_ROM" 2>&1); then
+  XDG_CONFIG_HOME="$TMPDIR" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+    timeout --kill-after=5s -- "$TIMEOUT" "$MGBA" -C "savegamePath=$TMPDIR" -d "$TMP_ROM" 2>&1); then
   :
 else
   status=$?
   if [ "$status" -eq 124 ]; then
     echo "FAIL: mGBA timed out after ${TIMEOUT}s waiting for $MILESTONE"
+  elif [ "$status" -eq 137 ]; then
+    echo "FAIL: mGBA was killed by SIGKILL while waiting for $MILESTONE (timeout escalation or external kill)"
   else
     echo "FAIL: mGBA exited with status $status"
   fi
@@ -74,7 +92,7 @@ else
   exit 1
 fi
 
-if grep -q "Hit breakpoint" <<<"$OUT"; then
+if grep -Eiq "^[[:blank:]]*(>[[:blank:]]*)?Hit breakpoint( [0-9]+)? at 0x0*${ADDR_HEX}([^[:xdigit:]]|$)" <<<"$OUT"; then
   echo "PASS: $ROM reached the title screen ($MILESTONE @ $ADDR)"
 else
   echo "FAIL: $ROM exited before hitting $MILESTONE @ $ADDR"

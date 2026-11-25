@@ -3,16 +3,16 @@
 # Usage: scripts/smoke_test_nix.sh [rom] [timeout_seconds]
 set -euo pipefail
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 if [ -n "${1:-}" ]; then
   case "$1" in
     /*) ROM=$1 ;;
-    *) ROM="$PWD/$1" ;;
+    *) ROM="$REPO_ROOT/$1" ;;
   esac
 else
   ROM="$REPO_ROOT/emerogue.gba"
 fi
 TIMEOUT=${2:-60}
 
-cd "$REPO_ROOT"
+cd -- "$REPO_ROOT"
 nix-shell --run "$(printf 'scripts/smoke_test.sh %q %q' "$ROM" "$TIMEOUT")"
