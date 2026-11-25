@@ -3976,7 +3976,9 @@ static void CursorCb_QuickHeal(u8 taskId)
 #ifdef ROGUE_EXPANSION
                 if(healingItemId == ITEM_SITRUS_BERRY)
                 {
+#if I_SITRUS_BERRY_HEAL >= GEN_4
                     healAmount = max(1, maxHp * healAmount / 100);
+#endif
                 }
 #endif
                 healingItemCount = 1 + ((missingHp - 1) / healAmount);
