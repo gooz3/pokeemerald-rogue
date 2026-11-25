@@ -91,7 +91,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/poryscript-linux.zip
-          key: poryscript-archive-${{ runner.os }}-${{ runner.arch }}-3.0.2
+          key: poryscript-archive-${{ runner.os }}-${{ runner.arch }}-3.0.2-1080c2c48a01
 
       - name: Fetch and verify Linux Poryscript
         run: |
