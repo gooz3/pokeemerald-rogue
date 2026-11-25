@@ -72,6 +72,17 @@ beyond_body = b"".join(struct.pack("<IIIIIIII", *p) for p in beyond_phdrs)
 with pathlib.Path(sys.argv[1]).with_name("beyond-rom.elf").open("wb") as fixture:
     fixture.write(beyond_ehdr + beyond_body)
     fixture.truncate(0x00101100)
+
+# One in-range ROM segment plus a file-backed segment ending before rom_origin (0x08000000).
+before_phdrs = [
+    (1, 0x100, 0x08000000, 0x08000000, 0x00100000, 0x00100000, 5, 4),
+    (1, 0x00100100, 0x02000000, 0x02000000, 0x00001000, 0x00001000, 6, 4),
+]
+before_ehdr = e_ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0x08000000, 52, 0, 0, 52, 32, len(before_phdrs), 0, 0, 0)
+before_body = b"".join(struct.pack("<IIIIIIII", *p) for p in before_phdrs)
+with pathlib.Path(sys.argv[1]).with_name("before-rom.elf").open("wb") as fixture:
+    fixture.write(before_ehdr + before_body)
+    fixture.truncate(0x00101100)
 PY
 
 status=0
@@ -94,6 +105,14 @@ status=0
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/beyond-rom.elf" 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q 'File-backed PT_LOAD segment starts beyond ROM' <<<"$OUT"; then
   echo "FAIL: expected file-backed PT_LOAD segment beyond ROM to be rejected"
+  echo "$OUT"
+  exit 1
+fi
+
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/before-rom.elf" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'File-backed PT_LOAD segment ends before ROM' <<<"$OUT"; then
+  echo "FAIL: expected file-backed PT_LOAD segment before ROM to be rejected"
   echo "$OUT"
   exit 1
 fi
@@ -152,6 +171,15 @@ if [ "$status" -ne 1 ] || ! grep -q '^FAIL: Could not read memory usage from ' <
   exit 1
 fi
 
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --summary "$TMPDIR" \
+  --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 95 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: Could not write memory summary to ' <<<"$OUT"; then
+  echo "FAIL: expected clean FAIL message (exit 1) for unwritable --summary path"
+  echo "$OUT"
+  exit 1
+fi
+
 # --- 2. smoke_test.sh: ELF match, gbafix -p fallback, debugger commands, timeout, exit status ---
 STUB_BIN="$TMPDIR/bin"
 mkdir -p "$STUB_BIN"
@@ -184,10 +212,18 @@ if [[ $# -ne 4 || -z ${XDG_CONFIG_HOME:-} || $1 != -C || $2 != "savegamePath=$XD
   printf 'Expected an isolated config, save directory, and ROM copy\n' >&2
   exit 1
 fi
+if [[ ${SDL_VIDEODRIVER:-} != dummy || ${SDL_AUDIODRIVER:-} != dummy ]]; then
+  printf 'Expected headless SDL dummy drivers\n' >&2
+  exit 1
+fi
 commands=$(cat)
 if [[ "$commands" != $'break 0x0820bdb0\ncontinue\nquit' ]]; then
   printf 'Unexpected debugger commands:\n%s\n' "$commands" >&2
   exit 1
+fi
+if [[ ${STUB_IGNORE_TERM:-0} == 1 ]]; then
+  trap '' TERM
+  exec sleep 10
 fi
 if [[ ${STUB_HANG:-0} == 1 ]]; then
   exec sleep 3
@@ -222,6 +258,14 @@ status=0
 OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" STUB_HANG=1 "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 1 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: mGBA timed out after 1s waiting for Task_TitleScreenPhase3$' <<<"$OUT"; then
   echo "FAIL: smoke_test.sh should fail with timeout diagnostic when mGBA hangs"
+  echo "$OUT"
+  exit 1
+fi
+
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" GBAFIX="$STUB_BIN/gbafix" STUB_HIT_ADDR="0x0820BDB0" STUB_IGNORE_TERM=1 "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 1 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: mGBA was killed by SIGKILL while waiting for Task_TitleScreenPhase3' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should report SIGKILL escalation when mGBA ignores SIGTERM"
   echo "$OUT"
   exit 1
 fi
@@ -296,6 +340,20 @@ status=0
 OUT=$(PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: could not extract ROM image from ' <<<"$OUT"; then
   echo "FAIL: smoke_test.sh should reject an objcopy failure"
+  echo "$OUT"
+  exit 1
+fi
+
+cat > "$STUB_BIN/arm-none-eabi-nm" <<'EOF'
+#!/usr/bin/env bash
+echo "0820bdb1 t Task_TitleScreenPhase3"
+exit 42
+EOF
+chmod +x "$STUB_BIN/arm-none-eabi-nm"
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: could not read symbols from ' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should reject an arm-none-eabi-nm failure"
   echo "$OUT"
   exit 1
 fi

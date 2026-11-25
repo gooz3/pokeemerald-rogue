@@ -91,13 +91,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: tools/poryscript/poryscript-linux
-          key: poryscript-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('init_deps.sh') }}
+          key: poryscript-${{ runner.os }}-${{ runner.arch }}-3.0.2
 
-      - name: Fetch build dependencies
+      - name: Fetch Linux Poryscript
         run: |
+          set -euo pipefail
           if [ ! -x tools/poryscript/poryscript-linux/poryscript ]; then
-            rm -rf tools/poryscript
-            ./init_deps.sh
+            TMPDIR=$(mktemp -d)
+            trap 'rm -rf "$TMPDIR"' EXIT
+            wget -nv -O "$TMPDIR/poryscript-linux.zip" \
+              https://github.com/huderlem/poryscript/releases/download/3.0.2/poryscript-linux.zip
+            echo "1080c2c48a0122f72e3325e0419ea5689ccd40bf4be3ffa2bb1cdee99abf53e6  $TMPDIR/poryscript-linux.zip" | sha256sum -c -
+            unzip -q "$TMPDIR/poryscript-linux.zip" -d "$TMPDIR/out"
+            rm -rf tools/poryscript/poryscript-linux
+            mkdir -p tools/poryscript
+            mv "$TMPDIR/out/poryscript-linux" tools/poryscript/poryscript-linux
           fi
           test -x tools/poryscript/poryscript-linux/poryscript
 

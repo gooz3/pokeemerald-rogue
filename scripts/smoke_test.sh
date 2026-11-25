@@ -57,7 +57,10 @@ TMP_ELF=$(mktemp "$TMPDIR/source-elf.XXXXXXXX")
 cp -- "$ROM" "$TMP_ROM"
 cp -- "$ELF" "$TMP_ELF"
 
-ADDR_RAW=$(arm-none-eabi-nm -- "$TMP_ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol && $1 ~ /^[0-9a-fA-F]+$/ { print "0x" $1; found = 1 }')
+if ! ADDR_RAW=$(arm-none-eabi-nm -- "$TMP_ELF" | awk -v symbol="$MILESTONE" '!found && $3 == symbol && $1 ~ /^[0-9a-fA-F]+$/ { print "0x" $1; found = 1 }'); then
+  echo "FAIL: could not read symbols from $ELF"
+  exit 1
+fi
 if [ -z "$ADDR_RAW" ]; then
   echo "FAIL: $MILESTONE not found in $ELF"
   exit 1

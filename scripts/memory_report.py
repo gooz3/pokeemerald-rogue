@@ -53,12 +53,11 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
         if p_offset + p_filesz > file_size:
             raise ValueError(f"Truncated PT_LOAD segment in {elf_path}")
         segment_end = p_paddr + p_filesz
+        if segment_end <= rom_origin:
+            raise ValueError(f"File-backed PT_LOAD segment ends before ROM in {elf_path}")
         if p_paddr >= rom_origin + rom_length:
             raise ValueError(f"File-backed PT_LOAD segment starts beyond ROM in {elf_path}")
-        if segment_end > rom_origin:
-            end = segment_end - rom_origin
-            if end > rom_used:
-                rom_used = end
+        rom_used = max(rom_used, segment_end - rom_origin)
 
     if rom_used == 0:
         raise ValueError(f"No file-backed ROM PT_LOAD segments found in {elf_path}")
@@ -201,9 +200,13 @@ def main() -> int:
     print(report, end="")
 
     if args.summary is not None:
-        args.summary.parent.mkdir(parents=True, exist_ok=True)
-        with args.summary.open("a", encoding="utf-8") as fh:
-            fh.write(report + "\n")
+        try:
+            args.summary.parent.mkdir(parents=True, exist_ok=True)
+            with args.summary.open("a", encoding="utf-8") as fh:
+                fh.write(report + "\n")
+        except OSError as exc:
+            print(f"FAIL: Could not write memory summary to {args.summary}: {exc}", file=sys.stderr)
+            return 1
 
     if failed:
         print("FAIL: Memory headroom gate exceeded.", file=sys.stderr)
