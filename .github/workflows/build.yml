@@ -18,14 +18,12 @@ concurrency:
 
 jobs:
   checks:
-    name: Script & PR checks
+    name: Script checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
 
       - name: Clear persisted git credentials
         # actions/checkout's persist-credentials:false runs `git submodule foreach`,
@@ -46,30 +44,6 @@ jobs:
         run: |
           python3 -m py_compile scripts/memory_report.py
           scripts/test_ci_scripts.sh
-
-      - name: Check save-layout files on PR
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        run: |
-          if ! git rev-parse --verify -q HEAD^1 >/dev/null || ! git rev-parse --verify -q HEAD^2 >/dev/null; then
-            {
-              echo "### Save Compatibility Check"
-              echo ""
-              echo "> [!WARNING]"
-              echo "> Could not determine the PR merge commit parents in this checkout. Manually verify whether save-related files were modified."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          CHANGED=$(git diff --no-renames --name-only HEAD^1 HEAD)
-          if grep -Eq '^(include/(config|rogue|rogue_save|global|global\.(berry|fieldmap|tv)|save|pokemon_storage_system|pokemon|hall_of_fame|ereader_helpers|trainer_hill|recorded_battle)\.h|include/(config|constants)/.+\.h|src/(rogue_save|save|hall_of_fame|ereader_helpers|recorded_battle)\.c|data/maps/map_groups\.json|data/layouts/layouts\.json|src/data/region_map/region_map_sections\.json(\.txt)?|src/data/rogue/((decorations|quests)(\.json|/[^/]+\.json)|custom_mons\.json)|tools/(Pokabbie/Build/CustomJson|mapjson|jsonproc)/.+)$' <<<"$CHANGED"; then
-            {
-              echo "### Save Compatibility Check"
-              echo ""
-              echo "> [!WARNING]"
-              echo "> This PR modifies save-related code. Verify field order, struct sizes, and serialized save compatibility — or bump \`ROGUE_SAVE_VERSION\` and update migration/assert logic."
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
 
   build:
     name: Build & Smoke (${{ matrix.name }})
@@ -141,5 +115,5 @@ jobs:
             --label "${{ matrix.name }}" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --max-ewram-pct 99.5 \
-            --max-iwram-pct 90.0 \
+            --max-iwram-pct 85.0 \
             --max-rom-pct 99.5

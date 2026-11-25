@@ -78,7 +78,10 @@ def parse_map(map_path: pathlib.Path, elf_path: pathlib.Path) -> dict[str, tuple
     for line in cfg_match.group(1).splitlines():
         parts = line.split()
         if len(parts) >= 3 and parts[0] in EXPECTED_REGIONS:
-            regions[parts[0]] = (int(parts[1], 16), int(parts[2], 16))
+            origin, length = int(parts[1], 16), int(parts[2], 16)
+            if length <= 0:
+                raise ValueError(f"Expected positive length for {parts[0]} in {map_path}")
+            regions[parts[0]] = (origin, length)
 
     missing = [r for r in EXPECTED_REGIONS if r not in regions]
     if missing:
@@ -140,7 +143,7 @@ def main() -> int:
     parser.add_argument("--label", default="ROM", help="Build label for the Markdown heading")
     parser.add_argument("--summary", type=pathlib.Path, default=None, help="Append Markdown report to this file (e.g. $GITHUB_STEP_SUMMARY)")
     parser.add_argument("--max-ewram-pct", type=float, default=99.5)
-    parser.add_argument("--max-iwram-pct", type=float, default=90.0)
+    parser.add_argument("--max-iwram-pct", type=float, default=85.0)
     parser.add_argument("--max-rom-pct", type=float, default=99.5)
     args = parser.parse_args()
 

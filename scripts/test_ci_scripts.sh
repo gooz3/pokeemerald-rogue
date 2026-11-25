@@ -83,6 +83,15 @@ OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/overla
   --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 10)
 grep -q "| \`ROM\` |.*\\*\\*3\\.12%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: pre-ROM overlap segment mismatch"; echo "$OUT"; exit 1; }
 
+sed 's/0x02000000/0x00000000/' "$MAP" > "$TMPDIR/zero-rom.map"
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/zero-rom.map" --elf "$TMPDIR/overlap.elf" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'Expected positive length for ROM' <<<"$OUT"; then
+  echo "FAIL: expected zero-length ROM region to be rejected cleanly"
+  echo "$OUT"
+  exit 1
+fi
+
 # Expected high-water marks:
 # - EWRAM: 0x00038000 / 0x00040000 = 87.50% (includes NOLOAD section)
 # - IWRAM: (0x00004000 + 0x1c0) / 0x00008000 = 51.37% (includes wrapped section)

@@ -48,4 +48,4 @@ Quirks the scripts already handle. Keep them in mind if you build some other way
 - `gh` defaults to the fork. Never push to `upstream`.
 - If `git push` fails with `/usr/bin/gh: No such file or directory`, the global credential helper is stale. Run `gh auth setup-git`, or push once with:
   `git -c credential.helper= -c "credential.helper=!$(which gh) auth git-credential" push`
-- CI (`.github/workflows/build.yml`) runs on pushes and PRs to `gooz3-release`: Release + Debug builds, headless mGBA title-screen smoke tests, EWRAM/IWRAM/ROM % headroom gates, and script/save-header checks. Never upload `.gba` ROMs as CI artifacts or Releases.
+- CI (`.github/workflows/build.yml`) runs on pushes and PRs to `gooz3-release`: Release + Debug builds, headless mGBA title-screen smoke tests, EWRAM/IWRAM/ROM % headroom gates, and script checks. Never upload `.gba` ROMs as CI artifacts or Releases.
