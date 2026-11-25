@@ -193,6 +193,16 @@ for gate in EWRAM:87 IWRAM:55; do
   fi
 done
 
+# Valid memory table and IWRAM/ROM sections, but no EWRAM output sections: must fail closed, not report 0%.
+sed '/^Linker script and memory map/,$ { /^ewram[[:blank:]]/d; /^\.ram_/{ N; d; }; }' "$MAP" > "$TMPDIR/missing-ewram.map"
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$TMPDIR/missing-ewram.map" --elf "$ELF" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'No non-empty output sections found for EWRAM' <<<"$OUT"; then
+  echo "FAIL: expected a map with no EWRAM output sections to be rejected"
+  echo "$OUT"
+  exit 1
+fi
+
 : > "$TMPDIR/empty.map"
 cp "$ELF" "$TMPDIR/empty.elf"
 status=0

@@ -72,10 +72,27 @@ jobs:
             fi
           }
 
+      - name: Get APT cache scope
+        id: apt_cache
+        run: |
+          . /etc/os-release
+          echo "scope=${ID}-${VERSION_ID}-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      # Cache downloaded .debs only; the index is refreshed and packages installed normally each run.
+      - name: Cache APT packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ci-apt-archives/*.deb
+          key: ci-apt-${{ steps.apt_cache.outputs.scope }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/build.yml') }}
+
       - name: Install toolchain and emulator
         run: |
+          archives="$RUNNER_TEMP/ci-apt-archives"
+          mkdir -p "$archives/partial"
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Dir::Cache::archives="$archives" \
+            -o APT::Keep-Downloaded-Packages=true \
+            install -y --no-install-recommends \
             gcc-arm-none-eabi \
             binutils-arm-none-eabi \
             libnewlib-arm-none-eabi \
