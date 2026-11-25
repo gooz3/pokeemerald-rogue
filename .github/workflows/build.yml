@@ -72,90 +72,20 @@ jobs:
             fi
           }
 
-      - name: Plan APT packages
-        id: apt_cache
-        run: |
-          set -euo pipefail
-          export LC_ALL=C  # sort and join must agree on collation
-          printf '%s\n' gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
-            build-essential libpng-dev libelf-dev zlib1g-dev unzip wget mgba-sdl \
-            > "$RUNNER_TEMP/ci-apt-packages"
-          sudo apt-get update
-          . /etc/os-release
-          echo "scope=${ID}-${VERSION_ID}-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
-          # Plan against the same (still empty) archive dir the install uses, so every needed .deb is listed.
-          archives="$RUNNER_TEMP/ci-apt-archives"
-          mkdir -p "$archives/partial"
-          # Everything below only feeds the cache; on any failure, skip caching and let the install run.
-          skip() { echo "::warning::Skipping APT archive caching: $1"; exit 0; }
-          xargs -a "$RUNNER_TEMP/ci-apt-packages" \
-            sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends \
-            > "$RUNNER_TEMP/ci-apt-plan" || skip "could not list package URIs"
-          # "<sha256> <file>" for each planned .deb. --print-uris may only give MD5, so take SHA256
-          # from the signed package records, matched on the pool file name.
-          awk '{ uri = $1; gsub(/\047/, "", uri); sub(/.*\//, "", uri)
-                 gsub(/%2[bB]/, "+", uri); gsub(/%3[aA]/, ":", uri); gsub(/%7[eE]/, "~", uri); print uri, $2 }' \
-            "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-files" || skip "could not parse the package plan"
-          awk '{ split($2, p, "_"); print p[1] }' "$RUNNER_TEMP/ci-apt-plan" | sort -u \
-            | xargs -r apt-cache show \
-            | awk 'function emit() { if (f != "" && sha != "") print f, sha; f = sha = "" }
-                   /^$/ { emit(); next }
-                   /^Filename:/ { f = $2; sub(/.*\//, "", f) }
-                   /^SHA256:/ { sha = $2 }
-                   END { emit() }' \
-            | sort -u > "$RUNNER_TEMP/ci-apt-index" || skip "could not read package metadata"
-          # Every planned archive needs exactly one digest; otherwise skip caching and let APT download.
-          if ! join -a 1 "$RUNNER_TEMP/ci-apt-files" "$RUNNER_TEMP/ci-apt-index" \
-            | awk 'NF != 3 || seen[$2]++ {
-                     print "Missing or ambiguous SHA256 for " $2 > "/dev/stderr"
-                     bad = 1
-                     next
-                   }
-                   { print $3, $2 }
-                   END { exit bad }' \
-            | sort > "$RUNNER_TEMP/ci-apt-sha256"; then
-            skip "could not verify the package plan"
-          fi
-          # Nothing to download (all preinstalled): skip the cache, leaving package_plan_hash unset.
-          [ -s "$RUNNER_TEMP/ci-apt-sha256" ] || exit 0
-          # Key on names and digests, so any package update opens a new cache entry.
-          echo "package_plan_hash=$(sha256sum < "$RUNNER_TEMP/ci-apt-sha256" | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore APT packages
-        id: apt_restore
-        if: steps.apt_cache.outputs.package_plan_hash != ''
-        continue-on-error: true
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/ci-apt-archives/*.deb
-          key: ci-apt-${{ steps.apt_cache.outputs.scope }}-${{ runner.arch }}-${{ steps.apt_cache.outputs.package_plan_hash }}
-
       - name: Install toolchain and emulator
         run: |
-          set -euo pipefail
-          archives="$RUNNER_TEMP/ci-apt-archives"
-          # APT trusts a cached .deb whose size matches, so check restored files against the index digests.
-          shopt -s nullglob
-          for deb in "$archives"/*.deb; do
-            name=${deb##*/}
-            expected=$(awk -v n="$name" '$2 == n { print $1 }' "$RUNNER_TEMP/ci-apt-sha256")
-            actual=$(sha256sum < "$deb" | cut -d' ' -f1)
-            if [ -z "${expected:-}" ] || [ "$actual" != "$expected" ]; then
-              echo "::warning::Discarding unverified cached archive $name from cache key ${{ steps.apt_restore.outputs.cache-primary-key }}; evict that entry."
-              sudo rm -f -- "$deb"
-            fi
-          done
-          xargs -a "$RUNNER_TEMP/ci-apt-packages" sudo apt-get -o Dir::Cache::archives="$archives" \
-            -o APT::Keep-Downloaded-Packages=true \
-            install -y --no-install-recommends
-
-      # Save right after install so later build/test failures don't discard the download.
-      - name: Save APT packages
-        if: steps.apt_cache.outputs.package_plan_hash != '' && steps.apt_restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/ci-apt-archives/*.deb
-          key: ${{ steps.apt_restore.outputs.cache-primary-key }}
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi \
+            binutils-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            build-essential \
+            libpng-dev \
+            libelf-dev \
+            zlib1g-dev \
+            unzip \
+            wget \
+            mgba-sdl
 
       - name: Cache Linux Poryscript archive
         uses: actions/cache@v4
