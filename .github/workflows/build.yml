@@ -88,9 +88,11 @@ jobs:
           xargs -a "$RUNNER_TEMP/ci-apt-packages" \
             sudo apt-get -o Dir::Cache::archives="$archives" install --print-uris -qq --no-install-recommends \
             > "$RUNNER_TEMP/ci-apt-plan"
-          # "<sha256>  <file>" for each planned .deb, from the signed package index.
-          awk '{ if ($4 !~ /^SHA256:/) { print "missing SHA256 for " $2 > "/dev/stderr"; exit 1 }
-                 print substr($4, 8) "  " $2 }' "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-sha256"
+          # "<algo> <digest> <file>" for each planned .deb, from the signed package index.
+          awk '{ algo = ""
+                 for (i = 4; i <= NF; i++) if ($i ~ /^SHA(256|512):/) { split($i, h, ":"); algo = tolower(h[1]); digest = h[2] }
+                 if (algo == "") { print "no SHA-256/512 digest in APT plan line: " $0 > "/dev/stderr"; exit 1 }
+                 print algo, digest, $2 }' "$RUNNER_TEMP/ci-apt-plan" | sort > "$RUNNER_TEMP/ci-apt-sha256"
           # Key on names and digests, so any package update opens a new cache entry.
           echo "package_plan_hash=$(sha256sum < "$RUNNER_TEMP/ci-apt-sha256" | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
@@ -109,9 +111,10 @@ jobs:
           shopt -s nullglob
           for deb in "$archives"/*.deb; do
             name=${deb##*/}
-            expected=$(awk -v n="$name" '$2 == n { print $1 }' "$RUNNER_TEMP/ci-apt-sha256")
-            actual=$(sha256sum < "$deb" | cut -c1-64)
-            if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+            read -r algo expected _ < <(awk -v n="$name" '$3 == n' "$RUNNER_TEMP/ci-apt-sha256") || true
+            actual=""
+            [ -n "${algo:-}" ] && actual=$("${algo}sum" < "$deb" | cut -d' ' -f1)
+            if [ -z "${expected:-}" ] || [ "$actual" != "$expected" ]; then
               echo "Discarding unverified cached archive: $name"
               sudo rm -f -- "$deb"
             fi
