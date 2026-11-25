@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Boot the ROM headless in mGBA (with blank flash & isolated config) and check it reaches the interactive title screen.
 # Usage: scripts/smoke_test.sh [rom] [timeout_seconds]
+# Relative ROM paths are resolved from the caller's working directory.
+# Keep the matching .elf beside the ROM; padded builds also need the build's gbafix.
 set -euo pipefail
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -40,6 +42,11 @@ done
 if [ -z "$MGBA" ]; then
   echo "FAIL: mGBA executable not found in PATH or /usr/games"
   exit 1
+fi
+
+# Match the Makefile, which prepends $DEVKITARM/bin to PATH.
+if [[ -n ${DEVKITARM:-} && -d $DEVKITARM/bin ]]; then
+  export PATH="$DEVKITARM/bin:$PATH"
 fi
 
 for tool in arm-none-eabi-nm arm-none-eabi-objcopy; do

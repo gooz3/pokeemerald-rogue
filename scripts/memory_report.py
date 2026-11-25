@@ -56,6 +56,9 @@ def parse_elf_rom_used(elf_path: pathlib.Path, rom_origin: int, rom_length: int)
         segment_end = p_paddr + p_filesz
         if segment_end <= rom_origin:
             raise ValueError(f"File-backed PT_LOAD segment ends before ROM in {elf_path}")
+        # Only a segment that maps the ELF/program headers may start below ROM.
+        if p_paddr < rom_origin and (p_offset != 0 or rom_origin - p_paddr < e_phoff + table_size):
+            raise ValueError(f"Non-header PT_LOAD segment starts before ROM in {elf_path}")
         if p_paddr >= rom_origin + rom_length:
             raise ValueError(f"File-backed PT_LOAD segment starts beyond ROM in {elf_path}")
         rom_used = max(rom_used, segment_end - rom_origin)

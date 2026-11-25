@@ -100,13 +100,11 @@ jobs:
           checksum='1080c2c48a0122f72e3325e0419ea5689ccd40bf4be3ffa2bb1cdee99abf53e6'
           tmp_dir=$(mktemp -d)
           trap 'rm -rf "$tmp_dir"' EXIT
-          if [ ! -f "$archive" ]; then
+          if [ ! -f "$archive" ] || ! printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -; then
             wget -nv -O "$tmp_dir/poryscript-linux.zip" \
               https://github.com/huderlem/poryscript/releases/download/3.0.2/poryscript-linux.zip
             printf '%s  %s\n' "$checksum" "$tmp_dir/poryscript-linux.zip" | sha256sum -c -
             mv "$tmp_dir/poryscript-linux.zip" "$archive"
-          else
-            printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
           fi
           unzip -q "$archive" -d "$tmp_dir/out"
           rm -rf tools/poryscript/poryscript-linux

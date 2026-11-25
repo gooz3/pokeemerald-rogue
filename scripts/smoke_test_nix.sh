@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Boot the ROM headless in mGBA (via shell.nix) and check it reaches the interactive title screen.
 # Usage: scripts/smoke_test_nix.sh [rom] [timeout_seconds]
+# Unlike smoke_test.sh, this wrapper resolves relative ROM paths from the repository root.
 set -euo pipefail
 
 REPO_ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)

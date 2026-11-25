@@ -62,6 +62,12 @@ with pathlib.Path(sys.argv[1]).with_name("overlap.elf").open("wb") as fixture:
     fixture.write(overlap_ehdr + overlap_phdr)
     fixture.truncate(0x00100080)
 
+# Same layout, but a payload segment (nonzero file offset) loads below ROM.
+payload_phdr = struct.pack("<IIIIIIII", 1, 0x80, 0x07FFFF80, 0x07FFFF80, 0x00100080, 0x00100080, 5, 4)
+with pathlib.Path(sys.argv[1]).with_name("pre-rom-payload.elf").open("wb") as fixture:
+    fixture.write(overlap_ehdr + payload_phdr)
+    fixture.truncate(0x00100100)
+
 # One in-range ROM segment plus a file-backed segment starting at rom_origin + rom_length (0x0A000000).
 beyond_phdrs = [
     (1, 0x100, 0x08000000, 0x08000000, 0x00100000, 0x00100000, 5, 4),
@@ -120,6 +126,14 @@ fi
 OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/overlap.elf" \
   --max-ewram-pct 90 --max-iwram-pct 60 --max-rom-pct 10)
 grep -q "| \`ROM\` |.*\\*\\*3\\.12%\\*\\*.*| PASS |" <<<"$OUT" || { echo "FAIL: pre-ROM overlap segment mismatch"; echo "$OUT"; exit 1; }
+
+status=0
+OUT=$(python3 "$REPO_ROOT/scripts/memory_report.py" "$MAP" --elf "$TMPDIR/pre-rom-payload.elf" 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q 'Non-header PT_LOAD segment starts before ROM' <<<"$OUT"; then
+  echo "FAIL: expected a payload PT_LOAD segment below ROM to be rejected"
+  echo "$OUT"
+  exit 1
+fi
 
 sed '/^ROM[[:blank:]]/s/0x02000000/0x00000000/' "$MAP" > "$TMPDIR/zero-rom.map"
 status=0
@@ -351,11 +365,13 @@ cat > "$STUB_BIN/nix-shell" <<'EOF'
 exec bash -c "$2"
 EOF
 chmod +x "$STUB_BIN/nix-shell"
-cp -- "$TMPDIR/test.gba" "$TMPDIR/wrapper test.gba"
-cp -- "$TMPDIR/test.elf" "$TMPDIR/wrapper test.elf"
-WRAPPER_ROM=$(realpath --relative-to="$REPO_ROOT" -- "$TMPDIR/wrapper test.gba")
-if ! OUT=$(cd -- "$TMPDIR" && PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" \
-  "$REPO_ROOT/scripts/smoke_test_nix.sh" "$WRAPPER_ROM" 10 2>&1); then
+WRAPPER_REPO="$TMPDIR/wrapper-repo"
+mkdir -p "$WRAPPER_REPO/scripts" "$WRAPPER_REPO/fixtures" "$TMPDIR/caller"
+cp -- "$REPO_ROOT/scripts/smoke_test.sh" "$REPO_ROOT/scripts/smoke_test_nix.sh" "$WRAPPER_REPO/scripts/"
+cp -- "$TMPDIR/test.gba" "$WRAPPER_REPO/fixtures/wrapper test.gba"
+cp -- "$TMPDIR/test.elf" "$WRAPPER_REPO/fixtures/wrapper test.elf"
+if ! OUT=$(cd -- "$TMPDIR/caller" && PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" \
+  "$WRAPPER_REPO/scripts/smoke_test_nix.sh" 'fixtures/wrapper test.gba' 10 2>&1); then
   echo "FAIL: smoke_test_nix.sh should accept a repository-relative ROM path containing spaces"
   echo "$OUT"
   exit 1
@@ -384,6 +400,19 @@ status=0
 OUT=$(PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
 if [ "$status" -ne 1 ] || ! grep -q '^FAIL: could not read symbols from ' <<<"$OUT"; then
   echo "FAIL: smoke_test.sh should reject an arm-none-eabi-nm failure"
+  echo "$OUT"
+  exit 1
+fi
+
+cat > "$STUB_BIN/arm-none-eabi-nm" <<'STUB'
+#!/usr/bin/env bash
+echo "0820bdb1 t UnrelatedSymbol"
+STUB
+chmod +x "$STUB_BIN/arm-none-eabi-nm"
+status=0
+OUT=$(PATH="$STUB_BIN:$PATH" STUB_HIT_ADDR="0x0820BDB0" "$REPO_ROOT/scripts/smoke_test.sh" "$TMPDIR/test.gba" 10 2>&1) || status=$?
+if [ "$status" -ne 1 ] || ! grep -q '^FAIL: Task_TitleScreenPhase3 not found in ' <<<"$OUT"; then
+  echo "FAIL: smoke_test.sh should reject an ELF without the title-screen symbol"
   echo "$OUT"
   exit 1
 fi
